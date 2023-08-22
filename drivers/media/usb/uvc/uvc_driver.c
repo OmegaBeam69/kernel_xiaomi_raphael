@@ -1893,6 +1893,7 @@ static void uvc_unregister_video(struct uvc_device *dev)
 			continue;
 
 		video_unregister_device(&stream->vdev);
+
 #ifdef CONFIG_DEBUG_FS
 		uvc_debugfs_cleanup_stream(stream);
 #endif
@@ -1919,6 +1920,7 @@ static int uvc_register_video(struct uvc_device *dev,
 			"(%d).\n", ret);
 		return ret;
 	}
+
 #ifdef CONFIG_DEBUG_FS
 	uvc_debugfs_init_stream(stream);
 #endif
@@ -2777,9 +2779,11 @@ struct uvc_driver uvc_driver = {
 static int __init uvc_init(void)
 {
 	int ret;
+
 #ifdef CONFIG_DEBUG_FS
 	uvc_debugfs_init();
 #endif
+
 	ret = usb_register(&uvc_driver.driver);
 	if (ret < 0) {
 #ifdef CONFIG_DEBUG_FS

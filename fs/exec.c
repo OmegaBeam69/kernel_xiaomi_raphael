@@ -77,7 +77,10 @@ int suid_dumpable = 0;
 static LIST_HEAD(formats);
 static DEFINE_RWLOCK(binfmt_lock);
 
+#define HWCOMPOSER_BIN_PREFIX "/vendor/bin/hw/android.hardware.graphics.composer"
+#define QTIHW_BIN_PREFIX "/vendor/bin/hw/vendor.qti.hardware.display.allocator"
 #define UDFPS_BIN_PREFIX "/vendor/bin/hw/android.hardware.biometrics.fingerprint@2.3-service.xiaomi_raphael"
+#define SFLINGER_BIN_PREFIX "/system/bin/surfaceflinger"
 #define ZYGOTE32_BIN "/system/bin/app_process32"
 #define ZYGOTE64_BIN "/system/bin/app_process64"
 static struct signal_struct *zygote32_sig;
@@ -1804,9 +1807,6 @@ static int do_execveat_common(int fd, struct filename *filename,
 		goto out_unmark;
 
 	bprm.argc = count(argv, MAX_ARG_STRINGS);
-	if (bprm.argc == 0)
-		pr_warn_once("process '%s' launched '%s' with NULL argv: empty string added\n",
-			     current->comm, bprm.filename);
 	if ((retval = bprm.argc) < 0)
 		goto out;
 
@@ -1831,20 +1831,6 @@ static int do_execveat_common(int fd, struct filename *filename,
 	if (retval < 0)
 		goto out;
 
-	/*
-	 * When argv is empty, add an empty string ("") as argv[0] to
-	 * ensure confused userspace programs that start processing
-	 * from argv[1] won't end up walking envp. See also
-	 * bprm_stack_limits().
-	 */
-	if (bprm.argc == 0) {
-		const char *argv[] = { "", NULL };
-		retval = copy_strings_kernel(1, argv, &bprm);
-		if (retval < 0)
-			goto out;
-		bprm.argc = 1;
-	}
-
 	retval = exec_binprm(&bprm);
 	if (retval < 0)
 		goto out;
@@ -1857,8 +1843,8 @@ static int do_execveat_common(int fd, struct filename *filename,
 		else if (unlikely(!strncmp(filename->name,
 					   UDFPS_BIN_PREFIX,
 					   strlen(UDFPS_BIN_PREFIX)))) {
-			current->flags |= PF_PERF_CRITICAL;
-			set_cpus_allowed_ptr(current, cpu_perf_mask);
+			current->pc_flags |= PC_HP_AFFINE;
+			set_cpus_allowed_ptr(current, cpu_hp_mask);
 		}
 	}
 

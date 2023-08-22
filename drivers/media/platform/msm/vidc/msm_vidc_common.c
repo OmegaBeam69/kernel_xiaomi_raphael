@@ -26,8 +26,12 @@
 
 static struct kmem_cache *kmem_buf_pool;
 
-#define MSM_VIDC_QBUF_BATCH_TIMEOUT 300
+void __init init_vidc_kmem_buf_pool(void)
+{
+	kmem_buf_pool = KMEM_CACHE(msm_vidc_buffer, SLAB_HWCACHE_ALIGN | SLAB_PANIC);
+}
 
+#define MSM_VIDC_QBUF_BATCH_TIMEOUT 300
 #define IS_ALREADY_IN_STATE(__p, __d) (\
 	(__p >= __d)\
 )
@@ -629,12 +633,6 @@ int msm_comm_ctrl_init(struct msm_vidc_inst *inst,
 		return -EINVAL;
 	}
 
-	kmem_buf_pool = KMEM_CACHE(msm_vidc_buffer, SLAB_HWCACHE_ALIGN);
-	if (!kmem_buf_pool) {
-		dprintk(VIDC_ERR, "%s - failed to allocate kmem pool\n", __func__);
-		return -ENOMEM;
-	}
-
 	inst->ctrls = kcalloc(num_ctrls, sizeof(struct v4l2_ctrl *),
 				GFP_KERNEL);
 	if (!inst->ctrls) {
@@ -731,7 +729,6 @@ int msm_comm_ctrl_deinit(struct msm_vidc_inst *inst)
 	kfree(inst->ctrls);
 	kfree(inst->cluster);
 	v4l2_ctrl_handler_free(&inst->ctrl_handler);
-	kmem_cache_destroy(kmem_buf_pool);
 
 	return 0;
 }
@@ -2503,7 +2500,7 @@ static void handle_ebd(enum hal_command_response cmd, void *data)
 	struct vb2_buffer *vb;
 	struct msm_vidc_inst *inst;
 	struct vidc_hal_ebd *empty_buf_done;
-	struct vidc_tag_data tag_data = {0};
+	struct vidc_tag_data tag_data;
 	u32 planes[VIDEO_MAX_PLANES] = {0};
 	u32 extra_idx = 0;
 
@@ -2771,7 +2768,7 @@ exit:
 	put_inst(inst);
 }
 
-void handle_cmd_response(enum hal_command_response cmd, void *data)
+void handle_cmd_response(u32 cmd, void *data)
 {
 	dprintk(VIDC_DBG, "Command response = %d\n", cmd);
 	switch (cmd) {
@@ -4233,7 +4230,7 @@ static void populate_frame_data(struct vidc_frame_data *data,
 	int extra_idx;
 	struct vb2_buffer *vb;
 	struct vb2_v4l2_buffer *vbuf;
-	struct vidc_tag_data tag_data = { 0 };
+	struct vidc_tag_data tag_data;
 
 	if (!inst || !mbuf || !data) {
 		dprintk(VIDC_ERR, "%s: invalid params %pK %pK %pK\n",
@@ -6691,7 +6688,7 @@ struct msm_vidc_buffer *msm_comm_get_vidc_buffer(struct msm_vidc_inst *inst,
 
 	if (!found) {
 		/* this is new vb2_buffer */
-		mbuf = kmem_cache_zalloc(kmem_buf_pool, GFP_KERNEL);
+		mbuf = kzalloc(sizeof(struct msm_vidc_buffer), GFP_KERNEL);
 		if (!mbuf) {
 			dprintk(VIDC_ERR, "%s: alloc msm_vidc_buffer failed\n",
 				__func__);
@@ -6974,7 +6971,7 @@ static void kref_free_mbuf(struct kref *kref)
 	struct msm_vidc_buffer *mbuf = container_of(kref,
 			struct msm_vidc_buffer, kref);
 
-	kmem_cache_free(kmem_buf_pool, mbuf);
+	kfree(mbuf);
 }
 
 void kref_put_mbuf(struct msm_vidc_buffer *mbuf)

@@ -265,20 +265,20 @@ static void copy_from_brd(void *dst, struct brd_device *brd,
  * Process a single bvec of a bio.
  */
 static int brd_do_bvec(struct brd_device *brd, struct page *page,
-			unsigned int len, unsigned int off, unsigned int op,
+			unsigned int len, unsigned int off, bool is_write,
 			sector_t sector)
 {
 	void *mem;
 	int err = 0;
 
-	if (op_is_write(op)) {
+	if (is_write) {
 		err = copy_to_brd_setup(brd, sector, len);
 		if (err)
 			goto out;
 	}
 
 	mem = kmap_atomic(page);
-	if (!op_is_write(op)) {
+	if (!is_write) {
 		copy_from_brd(mem + off, brd, sector, len);
 		flush_dcache_page(page);
 	} else {
@@ -307,7 +307,7 @@ static blk_qc_t brd_make_request(struct request_queue *q, struct bio *bio)
 		int err;
 
 		err = brd_do_bvec(brd, bvec.bv_page, len, bvec.bv_offset,
-				  bio_op(bio), sector);
+					op_is_write(bio_op(bio)), sector);
 		if (err)
 			goto io_error;
 		sector += len >> SECTOR_SHIFT;
@@ -321,15 +321,15 @@ io_error:
 }
 
 static int brd_rw_page(struct block_device *bdev, sector_t sector,
-		       struct page *page, unsigned int op)
+		       struct page *page, bool is_write)
 {
 	struct brd_device *brd = bdev->bd_disk->private_data;
 	int err;
 
 	if (PageTransHuge(page))
 		return -ENOTSUPP;
-	err = brd_do_bvec(brd, page, PAGE_SIZE, 0, op, sector);
-	page_endio(page, op_is_write(op), err);
+	err = brd_do_bvec(brd, page, PAGE_SIZE, 0, is_write, sector);
+	page_endio(page, is_write, err);
 	return err;
 }
 
@@ -379,15 +379,15 @@ static const struct block_device_operations brd_fops = {
  * And now the modules code and kernel interface.
  */
 static int rd_nr = CONFIG_BLK_DEV_RAM_COUNT;
-module_param(rd_nr, int, S_IRUGO);
+module_param(rd_nr, int, 0444);
 MODULE_PARM_DESC(rd_nr, "Maximum number of brd devices");
 
 unsigned long rd_size = CONFIG_BLK_DEV_RAM_SIZE;
-module_param(rd_size, ulong, S_IRUGO);
+module_param(rd_size, ulong, 0444);
 MODULE_PARM_DESC(rd_size, "Size of each RAM disk in kbytes.");
 
 static int max_part = 1;
-module_param(max_part, int, S_IRUGO);
+module_param(max_part, int, 0444);
 MODULE_PARM_DESC(max_part, "Num Minors to reserve between devices");
 
 MODULE_LICENSE("GPL");

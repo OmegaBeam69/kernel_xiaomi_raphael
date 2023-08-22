@@ -377,12 +377,17 @@ else
 HOSTCC	= gcc
 HOSTCXX	= g++
 endif
-HOSTCFLAGS   := -Wall -Wmissing-prototypes -Wstrict-prototypes -O2 \
+HOSTCFLAGS   := -Wall -Wmissing-prototypes -Wstrict-prototypes -O3 \
 		-fomit-frame-pointer -std=gnu89 -pipe \
                 -Wno-deprecated-declarations $(HOST_LFS_CFLAGS)
-HOSTCXXFLAGS := -O2 $(HOST_LFS_CFLAGS)
+HOSTCXXFLAGS := -O3 $(HOST_LFS_CFLAGS)
 HOSTLDFLAGS  := $(HOST_LFS_LDFLAGS)
 HOST_LOADLIBES := $(HOST_LFS_LIBS)
+
+ifeq ($(shell $(HOSTCC) -v 2>&1 | grep -c "clang version"), 1)
+HOSTCFLAGS  += -Wno-unused-value -Wno-unused-parameter \
+		-Wno-missing-field-initializers
+endif
 
 # Make variables (CC, etc...)
 CPP		= $(CC) -E
@@ -517,52 +522,39 @@ ifneq ($(KBUILD_SRC),)
 endif
 
 ifeq ($(cc-name),clang)
-# Individual arch/{arch}/Makefiles should use -EL/-EB to set intended
-# endianness and -m32/-m64 to set word size based on Kconfigs instead of
-# relying on the target triple.
-CLANG_TARGET_FLAGS_arm		:= arm-linux-gnueabi
-CLANG_TARGET_FLAGS_arm64	:= aarch64-linux-gnu
-CLANG_TARGET_FLAGS_hexagon	:= hexagon-linux-musl
-CLANG_TARGET_FLAGS_m68k		:= m68k-linux-gnu
-CLANG_TARGET_FLAGS_mips		:= mipsel-linux-gnu
-CLANG_TARGET_FLAGS_powerpc	:= powerpc64le-linux-gnu
-CLANG_TARGET_FLAGS_riscv	:= riscv64-linux-gnu
-CLANG_TARGET_FLAGS_s390		:= s390x-linux-gnu
-CLANG_TARGET_FLAGS_x86		:= x86_64-linux-gnu
-CLANG_TARGET_FLAGS		:= $(CLANG_TARGET_FLAGS_$(SRCARCH))
-
 ifdef CONFIG_POLLY_CLANG
 KBUILD_CFLAGS += -mllvm -polly \
 		   -mllvm -polly-run-dce \
 		   -mllvm -polly-run-inliner \
-                   -mllvm -polly-isl-arg=--no-schedule-serialize-sccs \
+           -mllvm -polly-isl-arg=--no-schedule-serialize-sccs \
 		   -mllvm -polly-ast-use-context \
-                   -mllvm -polly-detect-keep-going \
-                   -mllvm -polly-position=before-vectorizer \
+           -mllvm -polly-detect-keep-going \
+		   -mllvm -polly-position=before-vectorizer \
 		   -mllvm -polly-vectorizer=stripmine \
-                   -mllvm -polly-detect-profitability-min-per-loop-insts=40 \
+           -mllvm -polly-detect-profitability-min-per-loop-insts=40 \
 		   -mllvm -polly-invariant-load-hoisting
 endif
-
-ifeq ($(CROSS_COMPILE),)
-ifeq ($(CLANG_TARGET_FLAGS),)
-$(error Specify CROSS_COMPILE or add '--target=' option to Makefile)
-else
-CLANG_FLAGS	+= --target=$(CLANG_TARGET_FLAGS)
-endif # CLANG_TARGET_FLAGS
-else
-CLANG_FLAGS	+= --target=$(notdir $(CROSS_COMPILE:%-=%))
-endif # CROSS_COMPILE
-
-ifneq ($(LLVM_IAS),1)
-CLANG_FLAGS	+= -no-integrated-as
+ifneq ($(CROSS_COMPILE),)
+CLANG_TRIPLE	?= $(CROSS_COMPILE)
+CLANG_FLAGS	+= --target=$(notdir $(CLANG_TRIPLE:%-=%))
+ifeq ($(shell $(srctree)/scripts/clang-android.sh $(CC) $(CLANG_FLAGS)), y)
+$(error "Clang with Android --target detected. Did you specify CLANG_TRIPLE?")
+endif
 GCC_TOOLCHAIN_DIR := $(dir $(shell which $(CROSS_COMPILE)elfedit))
 CLANG_FLAGS	+= --prefix=$(GCC_TOOLCHAIN_DIR)$(notdir $(CROSS_COMPILE))
+GCC_TOOLCHAIN	:= $(realpath $(GCC_TOOLCHAIN_DIR)/..)
+endif
+ifneq ($(GCC_TOOLCHAIN),)
+CLANG_FLAGS	+= --gcc-toolchain=$(GCC_TOOLCHAIN)
+endif
+ifneq ($(LLVM_IAS),1)
+CLANG_FLAGS	+= -no-integrated-as
 endif
 CLANG_FLAGS	+= -Werror=unknown-warning-option
 CLANG_FLAGS	+= $(call cc-option, -Wno-misleading-indentation)
 CLANG_FLAGS	+= $(call cc-option, -Wno-bool-operation)
 CLANG_FLAGS	+= $(call cc-option, -Wno-unsequenced)
+CLANG_FLAGS	+= $(call cc-option, -Wno-void-ptr-dereference)
 CLANG_FLAGS	+= $(call cc-option, -opaque-pointers)
 KBUILD_CFLAGS	+= $(CLANG_FLAGS)
 KBUILD_AFLAGS	+= $(CLANG_FLAGS)
@@ -738,7 +730,6 @@ export LLVM_AR LLVM_NM
 # Set O3 optimization level for LTO with most linkers
 LDFLAGS		+= -O3
 LDFLAGS		+= --plugin-opt=O3
-LDFLAGS		+= --lto-O3
 LDFLAGS		+= --plugin-opt=-import-instr-limit=40
 endif
 
@@ -749,24 +740,34 @@ ARCH_AFLAGS :=
 ARCH_CFLAGS :=
 include arch/$(SRCARCH)/Makefile
 
+ifdef CONFIG_CC_WERROR
+KBUILD_CFLAGS	+= -Werror
+endif
+
 KBUILD_CFLAGS	+= $(call cc-option,-fno-delete-null-pointer-checks,)
 KBUILD_CFLAGS	+= $(call cc-disable-warning,frame-address,)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, format-truncation)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, format-overflow)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, int-in-bool-context)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, address-of-packed-member)
-KBUILD_CFLAGS	+= $(call cc-disable-warning, attribute-alias)
+KBUILD_CFLAGS  += $(call cc-option, -Wno-format)
+KBUILD_CFLAGS  += $(call cc-option, -Wno-maybe-uninitialized)
 
-ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
-KBUILD_CFLAGS   += -Os
-else
+ifdef CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE
 KBUILD_CFLAGS   += -O2
+else ifdef CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3
+KBUILD_CFLAGS   += -O3
+else ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
+KBUILD_CFLAGS += -Os
+endif
+
 ifeq ($(cc-name),gcc)
 KBUILD_CFLAGS	+= -mcpu=cortex-a76.cortex-a55 -mtune=cortex-a76.cortex-a55
 endif
 ifeq ($(cc-name),clang)
-KBUILD_CFLAGS   += -O3
 KBUILD_CFLAGS	+= -mcpu=cortex-a76+crypto+crc -mtune=cortex-a76
+endif
+
 ifdef CONFIG_LTO_CLANG
 KBUILD_CFLAG	+= -fwhole-program-vtables
 endif
@@ -789,12 +790,6 @@ KBUILD_CFLAGS	+= -mllvm -polly \
 ifdef CONFIG_LD_DEAD_CODE_DATA_ELIMINATION
 KBUILD_CFLAGS	+= -mllvm -polly-run-dce
 endif
-endif
-endif
-endif
-
-ifdef CONFIG_MINIMAL_TRACING_FOR_IORAP
-KBUILD_CFLAGS   += -DNOTRACE
 endif
 
 ifdef CONFIG_INLINE_OPTIMIZATION
@@ -859,6 +854,7 @@ KBUILD_CFLAGS += $(call cc-disable-warning, duplicate-decl-specifier)
 KBUILD_CFLAGS += $(call cc-option, -Wno-undefined-optimized)
 KBUILD_CFLAGS += $(call cc-option, -Wno-tautological-constant-out-of-range-compare)
 KBUILD_CFLAGS += $(call cc-option, -Wno-sometimes-uninitialized)
+KBUILD_CFLAGS += $(call cc-disable-warning, void-pointer-to-enum-cast)
 
 # Quiet clang warning: comparison of unsigned expression < 0 is always false
 
@@ -870,7 +866,6 @@ ifdef CONFIG_MODULES
 # See modpost pattern 2
 KBUILD_CFLAGS += $(call cc-option, -mno-global-merge,)
 endif
-KBUILD_CFLAGS += $(call cc-option, -fcatch-undefined-behavior)
 endif
 
 KBUILD_CFLAGS += $(call cc-option,-fno-delete-null-pointer-checks,)
@@ -967,8 +962,8 @@ KBUILD_CFLAGS += $(call cc-option, -fno-inline-functions-called-once)
 endif
 
 ifdef CONFIG_LD_DEAD_CODE_DATA_ELIMINATION
-KBUILD_CFLAGS	+= $(call cc-option,-ffunction-sections,)
-KBUILD_CFLAGS	+= $(call cc-option,-fdata-sections,)
+KBUILD_CFLAGS	+= -ffunction-sections -fdata-sections
+LDFLAGS_vmlinux += --gc-sections
 endif
 
 ifdef CONFIG_LTO_CLANG
@@ -979,6 +974,12 @@ else
 lto-clang-flags	:= -flto
 endif
 lto-clang-flags += -fvisibility=default $(call cc-option, -fsplit-lto-unit)
+
+# Limit inlining across translation units to reduce binary size
+LD_FLAGS_LTO_CLANG := -mllvm -import-instr-limit=60
+
+KBUILD_LDFLAGS += $(LD_FLAGS_LTO_CLANG)
+KBUILD_LDFLAGS_MODULE += $(LD_FLAGS_LTO_CLANG)
 
 KBUILD_LDFLAGS_MODULE += -T scripts/module-lto.lds
 
@@ -1048,6 +1049,8 @@ KBUILD_CFLAGS += $(call cc-disable-warning, pointer-sign)
 KBUILD_CFLAGS += $(call cc-disable-warning, stringop-truncation)
 
 # We'll want to enable this eventually, but it's not going away for 5.7 at least
+KBUILD_CFLAGS += $(call cc-disable-warning, zero-length-bounds)
+KBUILD_CFLAGS += $(call cc-disable-warning, array-bounds)
 KBUILD_CFLAGS += $(call cc-disable-warning, stringop-overflow)
 
 # Another good warning that we'll want to enable eventually
@@ -1061,9 +1064,6 @@ KBUILD_CFLAGS	+= -fno-strict-overflow
 
 # Make sure -fstack-check isn't enabled (like gentoo apparently did)
 KBUILD_CFLAGS  += $(call cc-option,-fno-stack-check,)
-
-# conserve stack if available
-KBUILD_CFLAGS   += $(call cc-option,-fconserve-stack)
 
 # disallow errors like 'EXPORT_GPL(foo);' with missing header
 KBUILD_CFLAGS   += $(call cc-option,-Werror=implicit-int)
@@ -1101,10 +1101,6 @@ LDFLAGS_vmlinux += --build-id
 
 ifdef CONFIG_LD_DEAD_CODE_DATA_ELIMINATION
 LDFLAGS_vmlinux	+= $(call ld-option, --gc-sections,)
-endif
-
-ifeq ($(CONFIG_STRIP_ASM_SYMS),y)
-LDFLAGS_vmlinux	+= $(call ld-option, -X,)
 endif
 
 LDFLAGS	+= -z noexecstack

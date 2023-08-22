@@ -18,7 +18,6 @@
 #include <linux/msm_gsi.h>
 #include <net/sock.h>
 #include "ipa_i.h"
-#include "../ipa_rm_i.h"
 #include "ipa_trace.h"
 #include "ipahal/ipahal.h"
 #include "ipahal/ipahal_fltrt.h"
@@ -4456,7 +4455,6 @@ static void ipa_gsi_irq_rx_notify_cb(struct gsi_chan_xfer_notify *notify)
 	IPADBG_LOW("event %d notified\n", notify->evt_id);
 
 	sys = (struct ipa3_sys_context *)notify->chan_user_data;
-
 
 	/*
 	 * In suspend just before stopping the channel possible to receive

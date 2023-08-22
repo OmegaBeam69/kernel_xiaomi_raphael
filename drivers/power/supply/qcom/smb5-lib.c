@@ -22,6 +22,7 @@
 #include <linux/pmic-voter.h>
 #include <linux/of_batterydata.h>
 #include <linux/ktime.h>
+#include <linux/module.h>
 #include "smb5-lib.h"
 #include "smb5-reg.h"
 #include "schgm-flash.h"
@@ -2791,12 +2792,20 @@ static void smblib_reg_work(struct work_struct *work)
 #define ADAPTER_ZIMI_CAR_POWER    0x0b
 
 #ifdef CONFIG_THERMAL
+unsigned int skip_therm = 0;
+module_param(skip_therm, uint, S_IWUSR | S_IRUGO);
+
 static void smblib_dc_therm_charging(struct smb_charger *chg,
 					int temp_level)
 {
 	int thermal_icl_ua = 0;
 	union power_supply_propval pval = {0, };
 	union power_supply_propval val = {0, };
+
+	if (skip_therm) {
+		vote(chg->dc_icl_votable, THERMAL_DAEMON_VOTER, false, 0);
+		return;
+	}
 
 		switch (pval.intval) {
 		case ADAPTER_XIAOMI_QC3:
@@ -2893,6 +2902,12 @@ static int smblib_therm_charging(struct smb_charger *chg)
 
 	if (chg->system_temp_level >= MAX_TEMP_LEVEL)
 		return 0;
+
+	if (skip_therm) {
+		vote(chg->fcc_votable, THERMAL_DAEMON_VOTER, false, 0);
+		vote(chg->usb_icl_votable, THERMAL_DAEMON_VOTER, false, 0);
+		return 0;
+	}
 
 	switch (chg->real_charger_type) {
 	case POWER_SUPPLY_TYPE_USB_HVDCP:
@@ -4143,7 +4158,7 @@ int smblib_get_prop_usb_voltage_now(struct smb_charger *chg,
 {
 	union power_supply_propval pval = {0, };
 	int rc, ret = 0;
-	u8 reg = 0;
+	u8 reg;
 
 	mutex_lock(&chg->adc_lock);
 
@@ -4190,11 +4205,12 @@ int smblib_get_prop_usb_voltage_now(struct smb_charger *chg,
 
 restore_adc_config:
 	 /* Restore ADC channel config */
-	if (chg->wa_flags & USBIN_ADC_WA)
+	if (chg->wa_flags & USBIN_ADC_WA) {
 		rc = smblib_write(chg, BATIF_ADC_CHANNEL_EN_REG, reg);
-	if (rc < 0)
-		smblib_err(chg, "Couldn't write ADC config rc=%d\n",
-					rc);
+		if (rc < 0)
+			smblib_err(chg, "Couldn't write ADC config rc=%d\n",
+						rc);
+	}
 
 unlock:
 	mutex_unlock(&chg->adc_lock);
@@ -4318,7 +4334,7 @@ int smblib_get_prop_usb_port_temp(struct smb_charger *chg,
 			thermal_zone_get_zone_by_name(chg->usb_port_tz_name);
 		if (IS_ERR(chg->usb_port_tz)) {
 			rc = PTR_ERR(chg->usb_port_tz);
-			pr_debug("Couldn't get USB thermal zone rc=%d\n", rc);
+			pr_err("Couldn't get USB thermal zone rc=%d\n", rc);
 			return rc;
 		}
 	} else if (IS_ERR(chg->usb_port_tz))
@@ -4326,7 +4342,7 @@ int smblib_get_prop_usb_port_temp(struct smb_charger *chg,
 
 	rc = thermal_zone_get_temp(chg->usb_port_tz, &temp);
 	if (rc < 0) {
-		pr_debug("Couldn't get temp USB port thermal zone rc=%d\n", rc);
+		pr_err("Couldn't get temp USB port thermal zone rc=%d\n", rc);
 		return rc;
 	}
 

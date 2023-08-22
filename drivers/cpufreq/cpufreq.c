@@ -236,7 +236,7 @@ struct cpufreq_policy *cpufreq_cpu_get(unsigned int cpu)
 	struct cpufreq_policy *policy = NULL;
 	unsigned long flags;
 
-	if (WARN_ON(cpu >= nr_cpu_ids))
+	if (cpu >= nr_cpu_ids)
 		return NULL;
 
 	/* get the cpufreq driver */
@@ -628,8 +628,25 @@ static int cpufreq_parse_governor(char *str_governor, unsigned int *policy,
 			ret = request_module("cpufreq_%s", str_governor);
 			mutex_lock(&cpufreq_governor_mutex);
 
+			/*
+			 * At this point, if the governor was found via module
+			 * search, it will load it. However, if it didn't, we
+			 * are just going to exit without doing anything to
+			 * the governor. Most of the time, this is totally
+			 * fine; the one scenario where it's not is when a ROM
+			 * has a boot script that requests a governor that
+			 * exists in the default kernel but not in this one.
+			 * This kernel (and nearly every other Android kernel)
+			 * has the performance governor as default for boot
+			 * performance which is then changed to another,
+			 * usually schedutil. So, instead of just exiting if
+			 * the requested governor wasn't found, let's try
+			 * falling back to schedutil before falling out.
+			 */
 			if (ret == 0)
 				t = find_governor(str_governor);
+			else
+				t = find_governor("schedutil");
 		}
 
 		if (t != NULL) {
@@ -2258,7 +2275,7 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
 	* because new_policy is a copy of policy with one field updated.
 	*/
 	if (new_policy->min > new_policy->max)
-		return -EINVAL;
+		new_policy->min = new_policy->max;
 
 	/* verify the cpu speed can be set within this limit */
 	ret = cpufreq_driver->verify(new_policy);
@@ -2272,10 +2289,6 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
 	/* adjust if necessary - hardware incompatibility */
 	blocking_notifier_call_chain(&cpufreq_policy_notifier_list,
 			CPUFREQ_INCOMPATIBLE, new_policy);
-
-	/* the adjusted frequency should not exceed thermal limit */
-	blocking_notifier_call_chain(&cpufreq_policy_notifier_list,
-			CPUFREQ_THERMAL, new_policy);
 
 	/*
 	 * verify the cpu speed can be set within this limit, which might be

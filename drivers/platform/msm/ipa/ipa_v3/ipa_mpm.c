@@ -2347,7 +2347,7 @@ static void ipa_mpm_mhi_status_cb(struct mhi_device *mhi_dev,
 				enum MHI_CB mhi_cb)
 {
 	int mhip_idx;
-	enum mhip_status_type status = 0;
+	enum mhip_status_type status;
 
 	IPA_MPM_DBG("%d\n", mhi_cb);
 
@@ -2432,7 +2432,7 @@ int ipa_mpm_mhip_xdci_pipe_enable(enum ipa_usb_teth_prot xdci_teth_prot)
 	int probe_id = IPA_MPM_MHIP_CH_ID_MAX;
 	int i;
 	enum ipa_mpm_mhip_client_type mhip_client;
-	enum mhip_status_type status = 0;
+	enum mhip_status_type status;
 	int pipe_idx;
 	bool is_acted = true;
 	int ret = 0;

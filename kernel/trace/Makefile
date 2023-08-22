@@ -2,8 +2,6 @@
 
 # Do not instrument the tracer itself:
 
-ccflags-y := -UNOTRACE
-
 ifdef CONFIG_FUNCTION_TRACER
 ORIG_CFLAGS := $(KBUILD_CFLAGS)
 KBUILD_CFLAGS = $(subst $(CC_FLAGS_FTRACE),,$(ORIG_CFLAGS))
@@ -23,6 +21,7 @@ endif
 CFLAGS_trace_benchmark.o := -I$(src)
 CFLAGS_trace_events_filter.o := -I$(src)
 
+ccflags-y += -O3
 
 obj-$(CONFIG_TRACE_CLOCK) += trace_clock.o
 

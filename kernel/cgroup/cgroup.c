@@ -5610,7 +5610,7 @@ int __init cgroup_init(void)
 	BUG_ON(cgroup_init_cftypes(NULL, cgroup1_base_files));
 
 	/*
-	 * The latency of the synchronize_rcu() is too high for cgroups,
+	 * The latency of the synchronize_sched() is too high for cgroups,
 	 * avoid it at the cost of forcing all readers into the slow path.
 	 */
 	rcu_sync_enter_start(&cgroup_threadgroup_rwsem.rss);
@@ -6059,6 +6059,15 @@ static int __init cgroup_disable(char *str)
 				cgroup_opt_feature_names[i]);
 			break;
 		}
+
+		for (i = 0; i < OPT_FEATURE_COUNT; i++) {
+			if (strcmp(token, cgroup_opt_feature_names[i]))
+				continue;
+			cgroup_feature_disable_mask |= 1 << i;
+			pr_info("Disabling %s control group feature\n",
+				cgroup_opt_feature_names[i]);
+			break;
+		}
 	}
 	return 1;
 }
@@ -6287,48 +6296,6 @@ int cgroup_bpf_detach(struct cgroup *cgrp, struct bpf_prog *prog,
 #endif /* CONFIG_CGROUP_BPF */
 
 #ifdef CONFIG_SYSFS
-static u64 power_of_ten(int power)
-{
-	u64 v = 1;
-	while (power--)
-		v *= 10;
-	return v;
-}
-
-/**
- * cgroup_parse_float - parse a floating number
- * @input: input string
- * @dec_shift: number of decimal digits to shift
- * @v: output
- *
- * Parse a decimal floating point number in @input and store the result in
- * @v with decimal point right shifted @dec_shift times.  For example, if
- * @input is "12.3456" and @dec_shift is 3, *@v will be set to 12345.
- * Returns 0 on success, -errno otherwise.
- *
- * There's nothing cgroup specific about this function except that it's
- * currently the only user.
- */
-int cgroup_parse_float(const char *input, unsigned dec_shift, s64 *v)
-{
-	s64 whole, frac = 0;
-	int fstart = 0, fend = 0, flen;
-
-	if (!sscanf(input, "%lld.%n%lld%n", &whole, &fstart, &frac, &fend))
-		return -EINVAL;
-	if (frac < 0)
-		return -EINVAL;
-
-	flen = fend > fstart ? fend - fstart : 0;
-	if (flen < dec_shift)
-		frac *= power_of_ten(dec_shift - flen);
-	else
-		frac = DIV_ROUND_CLOSEST_ULL(frac, power_of_ten(flen - dec_shift));
-
-	*v = whole * power_of_ten(dec_shift) + frac;
-	return 0;
-}
-
 static ssize_t show_delegatable_files(struct cftype *files, char *buf,
 				      ssize_t size, const char *prefix)
 {
@@ -6393,5 +6360,46 @@ static int __init cgroup_sysfs_init(void)
 	return sysfs_create_group(kernel_kobj, &cgroup_sysfs_attr_group);
 }
 subsys_initcall(cgroup_sysfs_init);
-
 #endif /* CONFIG_SYSFS */
+
+static u64 power_of_ten(int power)
+{
+	u64 v = 1;
+	while (power--)
+		v *= 10;
+	return v;
+}
+
+/**
+ * cgroup_parse_float - parse a floating number
+ * @input: input string
+ * @dec_shift: number of decimal digits to shift
+ * @v: output
+ *
+ * Parse a decimal floating point number in @input and store the result in
+ * @v with decimal point right shifted @dec_shift times.  For example, if
+ * @input is "12.3456" and @dec_shift is 3, *@v will be set to 12345.
+ * Returns 0 on success, -errno otherwise.
+ *
+ * There's nothing cgroup specific about this function except that it's
+ * currently the only user.
+ */
+int cgroup_parse_float(const char *input, unsigned dec_shift, s64 *v)
+{
+	s64 whole, frac = 0;
+	int fstart = 0, fend = 0, flen;
+
+	if (!sscanf(input, "%lld.%n%lld%n", &whole, &fstart, &frac, &fend))
+		return -EINVAL;
+	if (frac < 0)
+		return -EINVAL;
+
+	flen = fend > fstart ? fend - fstart : 0;
+	if (flen < dec_shift)
+		frac *= power_of_ten(dec_shift - flen);
+	else
+		frac = DIV_ROUND_CLOSEST_ULL(frac, power_of_ten(flen - dec_shift));
+
+	*v = whole * power_of_ten(dec_shift) + frac;
+	return 0;
+}

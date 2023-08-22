@@ -67,6 +67,7 @@
 
 #include <linux/atomic.h>
 #include <linux/refcount.h>
+#include <linux/llist.h>
 #include <net/dst.h>
 #include <net/checksum.h>
 #include <net/tcp_states.h>
@@ -387,6 +388,7 @@ struct sock {
 		struct sk_buff	*head;
 		struct sk_buff	*tail;
 	} sk_backlog;
+        struct llist_head defer_list;
 #define sk_rmem_alloc sk_backlog.rmem_alloc
 
 	int			sk_forward_alloc;
@@ -424,8 +426,8 @@ struct sock {
 	struct timer_list	sk_timer;
 	__u32			sk_priority;
 	__u32			sk_mark;
-	u32			sk_pacing_rate; /* bytes per second */
-	u32			sk_max_pacing_rate;
+	unsigned long		sk_pacing_rate; /* bytes per second */
+	unsigned long		sk_max_pacing_rate;
 	struct page_frag	sk_frag;
 	netdev_features_t	sk_route_caps;
 	netdev_features_t	sk_route_nocaps;
@@ -1482,8 +1484,10 @@ do {									\
 } while (0)
 
 #ifdef CONFIG_LOCKDEP
-static inline bool lockdep_sock_is_held(const struct sock *sk)
+static inline bool lockdep_sock_is_held(const struct sock *csk)
 {
+	struct sock *sk = (struct sock *)csk;
+
 	return lockdep_is_held(&sk->sk_lock) ||
 	       lockdep_is_held(&sk->sk_lock.slock);
 }
@@ -2490,7 +2494,6 @@ extern int sysctl_optmem_max;
 
 extern __u32 sysctl_wmem_default;
 extern __u32 sysctl_rmem_default;
-
 /* On 32bit arches, an skb frag is limited to 2^15 */
 #define SKB_FRAG_PAGE_ORDER	get_order(32768)
 
@@ -2500,9 +2503,9 @@ extern __u32 sysctl_rmem_default;
  */
 static inline void sk_pacing_shift_update(struct sock *sk, int val)
 {
-	if (!sk || !sk_fullsock(sk) || sk->sk_pacing_shift == val)
+	if (!sk || !sk_fullsock(sk) || READ_ONCE(sk->sk_pacing_shift) == val)
 		return;
-	sk->sk_pacing_shift = val;
+	WRITE_ONCE(sk->sk_pacing_shift, val);
 }
 /* SOCKEV Notifier Events */
 #define SOCKEV_SOCKET   0x00

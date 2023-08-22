@@ -546,7 +546,7 @@ static void sde_encoder_phys_vid_setup_timing_engine(
 exit:
 	if (phys_enc->parent_ops.get_qsync_fps)
 		phys_enc->parent_ops.get_qsync_fps(
-				phys_enc->parent, &qsync_min_fps);
+			phys_enc->parent, &qsync_min_fps, mode.vrefresh);
 
 	/* only panels which support qsync will have a non-zero min fps */
 	if (qsync_min_fps) {
@@ -996,7 +996,6 @@ static int sde_encoder_phys_vid_prepare_for_kickoff(
 	struct drm_connector *conn;
 	int event;
 	int rc;
-	int irq_enable;
 
 	if (!phys_enc || !params || !phys_enc->hw_ctl) {
 		SDE_ERROR("invalid encoder/parameters\n");
@@ -1025,21 +1024,12 @@ static int sde_encoder_phys_vid_prepare_for_kickoff(
 		/* to avoid flooding, only log first time, and "dead" time */
 		if (vid_enc->error_count == 1) {
 			SDE_EVT32(DRMID(phys_enc->parent), SDE_EVTLOG_FATAL);
-			mutex_lock(phys_enc->vblank_ctl_lock);
 
-			irq_enable = atomic_read(&phys_enc->vblank_refcount);
-
-			if (irq_enable)
-				sde_encoder_helper_unregister_irq(
+			sde_encoder_helper_unregister_irq(
 					phys_enc, INTR_IDX_VSYNC);
-
 			SDE_DBG_DUMP("all", "dbg_bus", "vbif_dbg_bus");
-
-			if (irq_enable)
-				sde_encoder_helper_register_irq(
+			sde_encoder_helper_register_irq(
 					phys_enc, INTR_IDX_VSYNC);
-
-			mutex_unlock(phys_enc->vblank_ctl_lock);
 		}
 
 		/*

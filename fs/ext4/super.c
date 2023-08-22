@@ -1665,7 +1665,7 @@ static const struct mount_opts {
 	 MOPT_NO_EXT2},
 	{Opt_data_err_ignore, EXT4_MOUNT_DATA_ERR_ABORT,
 	 MOPT_NO_EXT2},
-	{Opt_barrier, EXT4_MOUNT_BARRIER, MOPT_SET},
+	{Opt_barrier, EXT4_MOUNT_BARRIER, MOPT_CLEAR},
 	{Opt_nobarrier, EXT4_MOUNT_BARRIER, MOPT_CLEAR},
 	{Opt_noauto_da_alloc, EXT4_MOUNT_NO_AUTO_DA_ALLOC, MOPT_SET},
 	{Opt_auto_da_alloc, EXT4_MOUNT_NO_AUTO_DA_ALLOC, MOPT_CLEAR},
@@ -1682,8 +1682,10 @@ static const struct mount_opts {
 	{Opt_journal_dev, 0, MOPT_NO_EXT2 | MOPT_GTE0},
 	{Opt_journal_path, 0, MOPT_NO_EXT2 | MOPT_STRING},
 	{Opt_journal_ioprio, 0, MOPT_NO_EXT2 | MOPT_GTE0},
-	{Opt_data_journal, EXT4_MOUNT_JOURNAL_DATA, MOPT_NO_EXT2 | MOPT_DATAJ},
-	{Opt_data_ordered, EXT4_MOUNT_ORDERED_DATA, MOPT_NO_EXT2 | MOPT_DATAJ},
+	{Opt_data_journal, EXT4_MOUNT_WRITEBACK_DATA,
+	 MOPT_NO_EXT2 | MOPT_DATAJ},
+	{Opt_data_ordered, EXT4_MOUNT_WRITEBACK_DATA,
+	 MOPT_NO_EXT2 | MOPT_DATAJ},
 	{Opt_data_writeback, EXT4_MOUNT_WRITEBACK_DATA,
 	 MOPT_NO_EXT2 | MOPT_DATAJ},
 	{Opt_user_xattr, EXT4_MOUNT_XATTR_USER, MOPT_SET},
@@ -3660,7 +3662,7 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->s_sb_block = sb_block;
 	if (sb->s_bdev->bd_part)
 		sbi->s_sectors_written_start =
-			part_stat_read(sb->s_bdev->bd_part, sectors[STAT_WRITE]);
+			part_stat_read(sb->s_bdev->bd_part, sectors[1]);
 
 	/* Cleanup superblock name */
 	strreplace(sb->s_id, '/', '!');
@@ -4310,8 +4312,7 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 		goto failed_mount2;
 	}
 
-	get_random_bytes(&sbi->s_next_generation, sizeof(u32));
-	spin_lock_init(&sbi->s_next_gen_lock);
+	sbi->s_gdb_count = db_count;
 
 	setup_timer(&sbi->s_err_report, print_daily_error_info,
 		(unsigned long) sb);
@@ -5052,8 +5053,7 @@ static int ext4_commit_super(struct super_block *sb, int sync)
 	if (sb->s_bdev->bd_part)
 		es->s_kbytes_written =
 			cpu_to_le64(EXT4_SB(sb)->s_kbytes_written +
-			    ((part_stat_read(sb->s_bdev->bd_part,
-					     sectors[STAT_WRITE]) -
+			    ((part_stat_read(sb->s_bdev->bd_part, sectors[1]) -
 			      EXT4_SB(sb)->s_sectors_written_start) >> 1));
 	else
 		es->s_kbytes_written =
@@ -5323,9 +5323,11 @@ static void ext4_umount_end(struct super_block *sb, int flags)
 	 * next boot.
 	 */
 	if ((flags & MNT_FORCE) || atomic_read(&sb->s_active) > 1) {
-		ext4_msg(sb, KERN_ERR,
-			"errors=remount-ro for active namespaces on umount %x",
-						flags);
+		if (0) {
+			ext4_msg(sb, KERN_ERR,
+				"errors=remount-ro for active namespaces on umount %x",
+							flags);
+		}
 		clear_opt(sb, ERRORS_PANIC);
 		set_opt(sb, ERRORS_RO);
 		/* to write the latest s_kbytes_written */
@@ -5687,8 +5689,7 @@ static int ext4_statfs(struct dentry *dentry, struct kstatfs *buf)
 	buf->f_namelen = EXT4_NAME_LEN;
 	fsid = le64_to_cpup((void *)es->s_uuid) ^
 	       le64_to_cpup((void *)es->s_uuid + sizeof(u64));
-	buf->f_fsid.val[0] = fsid & 0xFFFFFFFFUL;
-	buf->f_fsid.val[1] = (fsid >> 32) & 0xFFFFFFFFUL;
+	buf->f_fsid = u64_to_fsid(fsid);
 
 #ifdef CONFIG_QUOTA
 	if (ext4_test_inode_flag(dentry->d_inode, EXT4_INODE_PROJINHERIT) &&

@@ -436,7 +436,6 @@ struct dma_buf {
 	struct list_head refs;
 	atomic_t dent_count;
 
-	bool from_kmem;
 };
 
 /**

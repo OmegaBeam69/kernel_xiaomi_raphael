@@ -285,24 +285,28 @@ static struct clk_init_data osm_clks_init[] = {
 		.name = "l3_clk",
 		.parent_names = (const char *[]){ "bi_tcxo_ao" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_l3_osm,
 	},
 	[1] = {
 		.name = "pwrcl_clk",
 		.parent_names = (const char *[]){ "bi_tcxo_ao" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_cpu_osm,
 	},
 	[2] = {
 		.name = "perfcl_clk",
 		.parent_names = (const char *[]){ "bi_tcxo_ao" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_cpu_osm,
 	},
 	[3] = {
 		.name = "perfpcl_clk",
 		.parent_names = (const char *[]){ "bi_tcxo_ao" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_cpu_osm,
 	},
 };
@@ -313,9 +317,9 @@ static struct clk_osm l3_clk = {
 	.hw.init = &osm_clks_init[0],
 };
 
-static DEFINE_CLK_VOTER(l3_cluster0_vote_clk, l3_clk, 0);
-static DEFINE_CLK_VOTER(l3_cluster1_vote_clk, l3_clk, 0);
-static DEFINE_CLK_VOTER(l3_cluster2_vote_clk, l3_clk, 0);
+static DEFINE_CLK_VOTER_NOCACHE(l3_cluster0_vote_clk, l3_clk, 0);
+static DEFINE_CLK_VOTER_NOCACHE(l3_cluster1_vote_clk, l3_clk, 0);
+static DEFINE_CLK_VOTER_NOCACHE(l3_cluster2_vote_clk, l3_clk, 0);
 static DEFINE_CLK_VOTER(l3_misc_vote_clk, l3_clk, 0);
 static DEFINE_CLK_VOTER(l3_gpu_vote_clk, l3_clk, 0);
 
@@ -333,6 +337,7 @@ static struct clk_osm cpu0_pwrcl_clk = {
 		.name = "cpu0_pwrcl_clk",
 		.parent_names = (const char *[]){ "pwrcl_clk" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_core,
 	},
 };
@@ -345,6 +350,7 @@ static struct clk_osm cpu1_pwrcl_clk = {
 		.name = "cpu1_pwrcl_clk",
 		.parent_names = (const char *[]){ "pwrcl_clk" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_core,
 	},
 };
@@ -357,6 +363,7 @@ static struct clk_osm cpu2_pwrcl_clk = {
 		.name = "cpu2_pwrcl_clk",
 		.parent_names = (const char *[]){ "pwrcl_clk" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_core,
 	},
 };
@@ -369,6 +376,7 @@ static struct clk_osm cpu3_pwrcl_clk = {
 		.name = "cpu3_pwrcl_clk",
 		.parent_names = (const char *[]){ "pwrcl_clk" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_core,
 	},
 };
@@ -381,6 +389,7 @@ static struct clk_osm cpu4_pwrcl_clk = {
 		.name = "cpu4_pwrcl_clk",
 		.parent_names = (const char *[]){ "pwrcl_clk" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_core,
 	},
 };
@@ -393,6 +402,7 @@ static struct clk_osm cpu5_pwrcl_clk = {
 		.name = "cpu5_pwrcl_clk",
 		.parent_names = (const char *[]){ "pwrcl_clk" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_core,
 	},
 };
@@ -411,6 +421,7 @@ static struct clk_osm cpu4_perfcl_clk = {
 		.name = "cpu4_perfcl_clk",
 		.parent_names = (const char *[]){ "perfcl_clk" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_core,
 	},
 };
@@ -423,6 +434,7 @@ static struct clk_osm cpu5_perfcl_clk = {
 		.name = "cpu5_perfcl_clk",
 		.parent_names = (const char *[]){ "perfcl_clk" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_core,
 	},
 };
@@ -435,6 +447,7 @@ static struct clk_osm cpu6_perfcl_clk = {
 		.name = "cpu6_perfcl_clk",
 		.parent_names = (const char *[]){ "perfcl_clk" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_core,
 	},
 };
@@ -447,6 +460,7 @@ static struct clk_osm cpu7_perfcl_clk = {
 		.name = "cpu7_perfcl_clk",
 		.parent_names = (const char *[]){ "perfcl_clk" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_core,
 	},
 };
@@ -465,6 +479,7 @@ static struct clk_osm cpu7_perfpcl_clk = {
 		.name = "cpu7_perfpcl_clk",
 		.parent_names = (const char *[]){ "perfpcl_clk" },
 		.num_parents = 1,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.ops = &clk_ops_core,
 	},
 };
@@ -610,9 +625,12 @@ static unsigned int
 osm_cpufreq_fast_switch(struct cpufreq_policy *policy, unsigned int target_freq)
 {
 	int index;
+	unsigned int relation;
 
-	index = cpufreq_frequency_table_target(policy, target_freq,
-							CPUFREQ_RELATION_L);
+	relation = target_freq < policy->max ? CPUFREQ_RELATION_L :
+					       CPUFREQ_RELATION_H;
+
+	index = cpufreq_frequency_table_target(policy, target_freq, relation);
 	if (index < 0)
 		return 0;
 
@@ -720,7 +738,7 @@ static int osm_cpufreq_cpu_init(struct cpufreq_policy *policy)
 		if (!osm_dt_find_freq(of_table, of_len, table[i].frequency))
 			table[i].frequency = CPUFREQ_ENTRY_INVALID;
 
-		if (core_count == SINGLE_CORE_COUNT || table[i].frequency < 576000)
+		if (core_count == SINGLE_CORE_COUNT)
 			table[i].frequency = CPUFREQ_ENTRY_INVALID;
 
 		/* Two of the same frequencies means end of table */

@@ -327,7 +327,6 @@ static int __jump_label_text_reserved(struct jump_entry *iter_start,
 			if (addr_conflict(iter, start, end))
 				return 1;
 		}
-		iter++;
 	}
 
 	return 0;
@@ -478,14 +477,13 @@ void __init jump_label_init(void)
 
 	for (iter = iter_start; iter < iter_stop; iter++) {
 		struct static_key *iterk;
-		bool in_init;
 
 		/* rewrite NOPs */
 		if (jump_label_type(iter) == JUMP_LABEL_NOP)
 			arch_jump_label_transform_static(iter, JUMP_LABEL_NOP);
 
-		in_init = init_section_contains((void *)jump_entry_code(iter), 1);
-		jump_entry_set_init(iter, in_init);
+		if (init_section_contains((void *)jump_entry_code(iter), 1))
+			jump_entry_set_init(iter);
 
 		iterk = jump_entry_key(iter);
 		if (iterk == key)
@@ -497,6 +495,19 @@ void __init jump_label_init(void)
 	static_key_initialized = true;
 	jump_label_unlock();
 	cpus_read_unlock();
+}
+
+/* Disable any jump label entries in __init/__exit code */
+void __init jump_label_invalidate_initmem(void)
+{
+	struct jump_entry *iter_start = __start___jump_table;
+	struct jump_entry *iter_stop = __stop___jump_table;
+	struct jump_entry *iter;
+
+	for (iter = iter_start; iter < iter_stop; iter++) {
+		if (init_section_contains((void *)(unsigned long)iter->code, 1))
+			iter->code = 0;
+	}
 }
 
 #ifdef CONFIG_MODULES
@@ -543,25 +554,19 @@ static void static_key_set_mod(struct static_key *key,
 static int __jump_label_mod_text_reserved(void *start, void *end)
 {
 	struct module *mod;
-	int ret;
 
 	preempt_disable();
 	mod = __module_text_address((unsigned long)start);
 	WARN_ON_ONCE(__module_text_address((unsigned long)end) != mod);
-	if (!try_module_get(mod))
-		mod = NULL;
 	preempt_enable();
 
 	if (!mod)
 		return 0;
 
-	ret = __jump_label_text_reserved(mod->jump_entries,
+
+	return __jump_label_text_reserved(mod->jump_entries,
 				mod->jump_entries + mod->num_jump_entries,
 				start, end, mod->state == MODULE_STATE_COMING);
-
-	module_put(mod);
-
-	return ret;
 }
 
 static void __jump_label_mod_update(struct static_key *key)
@@ -630,10 +635,9 @@ static int jump_label_add_module(struct module *mod)
 
 	for (iter = iter_start; iter < iter_stop; iter++) {
 		struct static_key *iterk;
-		bool in_init;
 
-		in_init = within_module_init(jump_entry_code(iter), mod);
-		jump_entry_set_init(iter, in_init);
+		if (within_module_init(jump_entry_code(iter), mod))
+			jump_entry_set_init(iter);
 
 		iterk = jump_entry_key(iter);
 		if (iterk == key)
@@ -726,6 +730,19 @@ static void jump_label_del_module(struct module *mod)
 	}
 }
 
+/* Disable any jump label entries in module init code */
+static void jump_label_invalidate_module_init(struct module *mod)
+{
+	struct jump_entry *iter_start = mod->jump_entries;
+	struct jump_entry *iter_stop = iter_start + mod->num_jump_entries;
+	struct jump_entry *iter;
+
+	for (iter = iter_start; iter < iter_stop; iter++) {
+		if (within_module_init(iter->code, mod))
+			iter->code = 0;
+	}
+}
+
 static int
 jump_label_module_notify(struct notifier_block *self, unsigned long val,
 			 void *data)
@@ -799,7 +816,6 @@ int jump_label_text_reserved(void *start, void *end)
 static void jump_label_update(struct static_key *key)
 {
 	struct jump_entry *stop = __stop___jump_table;
-	bool init = system_state < SYSTEM_RUNNING;
 	struct jump_entry *entry;
 #ifdef CONFIG_MODULES
 	struct module *mod;
@@ -811,16 +827,15 @@ static void jump_label_update(struct static_key *key)
 
 	preempt_disable();
 	mod = __module_address((unsigned long)key);
-	if (mod) {
+	if (mod)
 		stop = mod->jump_entries + mod->num_jump_entries;
-		init = mod->state == MODULE_STATE_COMING;
-	}
 	preempt_enable();
 #endif
 	entry = static_key_entries(key);
 	/* if there are no users, entry can be NULL */
 	if (entry)
-		__jump_label_update(key, entry, stop, init);
+		__jump_label_update(key, entry, stop,
+				    system_state < SYSTEM_RUNNING);
 }
 
 #ifdef CONFIG_STATIC_KEYS_SELFTEST

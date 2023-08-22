@@ -39,7 +39,7 @@ void
 __mutex_init(struct mutex *lock, const char *name, struct lock_class_key *key)
 {
 	atomic_long_set(&lock->owner, 0);
-	raw_spin_lock_init(&lock->wait_lock);
+	spin_lock_init(&lock->wait_lock);
 	INIT_LIST_HEAD(&lock->wait_list);
 #ifdef CONFIG_MUTEX_SPIN_ON_OWNER
 	osq_lock_init(&lock->osq);
@@ -83,7 +83,7 @@ static inline struct task_struct *__mutex_trylock_or_owner(struct mutex *lock)
 
 	owner = atomic_long_read(&lock->owner);
 	for (;;) { /* must loop, can race against a flag */
-		unsigned long flags = __owner_flags(owner);
+		unsigned long old, flags = __owner_flags(owner);
 		unsigned long task = owner & ~MUTEX_FLAGS;
 
 		if (task) {
@@ -107,8 +107,11 @@ static inline struct task_struct *__mutex_trylock_or_owner(struct mutex *lock)
 		 */
 		flags &= ~MUTEX_FLAG_HANDOFF;
 
-		if (atomic_long_try_cmpxchg_acquire(&lock->owner, &owner, curr | flags))
+		old = atomic_long_cmpxchg_acquire(&lock->owner, owner, curr | flags);
+		if (old == owner)
 			return NULL;
+
+		owner = old;
 	}
 
 	return __owner_task(owner);
@@ -148,7 +151,10 @@ static __always_inline bool __mutex_unlock_fast(struct mutex *lock)
 {
 	unsigned long curr = (unsigned long)current;
 
-	return atomic_long_try_cmpxchg_release(&lock->owner, &curr, 0UL);
+	if (atomic_long_cmpxchg_release(&lock->owner, curr, 0UL) == curr)
+		return true;
+
+	return false;
 }
 #endif
 
@@ -171,7 +177,7 @@ static inline bool __mutex_waiter_is_first(struct mutex *lock, struct mutex_wait
  * Add @waiter to a given location in the lock wait_list and set the
  * FLAG_WAITERS flag if it's the first waiter.
  */
-static void
+static void __sched
 __mutex_add_waiter(struct mutex *lock, struct mutex_waiter *waiter,
 		   struct list_head *list)
 {
@@ -180,16 +186,6 @@ __mutex_add_waiter(struct mutex *lock, struct mutex_waiter *waiter,
 	list_add_tail(&waiter->list, list);
 	if (__mutex_waiter_is_first(lock, waiter))
 		__mutex_set_flag(lock, MUTEX_FLAG_WAITERS);
-}
-
-static void
-__mutex_remove_waiter(struct mutex *lock, struct mutex_waiter *waiter)
-{
-	list_del(&waiter->list);
-	if (likely(list_empty(&lock->wait_list)))
-		__mutex_clear_flag(lock, MUTEX_FLAGS);
-
-	debug_mutex_remove_waiter(lock, waiter, current);
 }
 
 /*
@@ -203,7 +199,7 @@ static void __mutex_handoff(struct mutex *lock, struct task_struct *task)
 	unsigned long owner = atomic_long_read(&lock->owner);
 
 	for (;;) {
-		unsigned long new;
+		unsigned long old, new;
 
 #ifdef CONFIG_DEBUG_MUTEXES
 		DEBUG_LOCKS_WARN_ON(__owner_task(owner) != current);
@@ -215,8 +211,11 @@ static void __mutex_handoff(struct mutex *lock, struct task_struct *task)
 		if (task)
 			new |= MUTEX_FLAG_PICKUP;
 
-		if (atomic_long_try_cmpxchg_release(&lock->owner, &owner, new))
+		old = atomic_long_cmpxchg_release(&lock->owner, owner, new);
+		if (old == owner)
 			break;
+
+		owner = old;
 	}
 }
 
@@ -465,9 +464,9 @@ ww_mutex_set_context_fastpath(struct ww_mutex *lock, struct ww_acquire_ctx *ctx)
 	 * Uh oh, we raced in fastpath, check if any of the waiters need to
 	 * die or wound us.
 	 */
-	raw_spin_lock(&lock->base.wait_lock);
+	spin_lock(&lock->base.wait_lock);
 	__ww_mutex_check_waiters(&lock->base, ctx);
-	raw_spin_unlock(&lock->base.wait_lock);
+	spin_unlock(&lock->base.wait_lock);
 }
 
 #ifdef CONFIG_MUTEX_SPIN_ON_OWNER
@@ -619,7 +618,7 @@ static inline int mutex_can_spin_on_owner(struct mutex *lock)
  */
 static __always_inline bool
 mutex_optimistic_spin(struct mutex *lock, struct ww_acquire_ctx *ww_ctx,
-		      struct mutex_waiter *waiter)
+		      const bool use_ww_ctx, struct mutex_waiter *waiter)
 {
 	if (!waiter) {
 		/*
@@ -695,7 +694,7 @@ fail:
 #else
 static __always_inline bool
 mutex_optimistic_spin(struct mutex *lock, struct ww_acquire_ctx *ww_ctx,
-		      struct mutex_waiter *waiter)
+		      const bool use_ww_ctx, struct mutex_waiter *waiter)
 {
 	return false;
 }
@@ -911,11 +910,9 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 		    struct ww_acquire_ctx *ww_ctx, const bool use_ww_ctx)
 {
 	struct mutex_waiter waiter;
+	bool first = false;
 	struct ww_mutex *ww;
 	int ret;
-
-	if (!use_ww_ctx)
-		ww_ctx = NULL;
 
 	might_sleep();
 
@@ -924,7 +921,7 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 #endif
 
 	ww = container_of(lock, struct ww_mutex, base);
-	if (ww_ctx) {
+	if (use_ww_ctx && ww_ctx) {
 		if (unlikely(ww_ctx == READ_ONCE(ww->ctx)))
 			return -EALREADY;
 
@@ -941,21 +938,21 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 	mutex_acquire_nest(&lock->dep_map, subclass, 0, nest_lock, ip);
 
 	if (__mutex_trylock(lock) ||
-	    mutex_optimistic_spin(lock, ww_ctx, NULL)) {
+	    mutex_optimistic_spin(lock, ww_ctx, use_ww_ctx, NULL)) {
 		/* got the lock, yay! */
 		lock_acquired(&lock->dep_map, ip);
-		if (ww_ctx)
+		if (use_ww_ctx && ww_ctx)
 			ww_mutex_set_context_fastpath(ww, ww_ctx);
 		preempt_enable();
 		return 0;
 	}
 
-	raw_spin_lock(&lock->wait_lock);
+	spin_lock(&lock->wait_lock);
 	/*
 	 * After waiting to acquire the wait_lock, try again.
 	 */
 	if (__mutex_trylock(lock)) {
-		if (ww_ctx)
+		if (use_ww_ctx && ww_ctx)
 			__ww_mutex_check_waiters(lock, ww_ctx);
 
 		goto skip_wait;
@@ -989,8 +986,6 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 
 	set_current_state(state);
 	for (;;) {
-		bool first;
-
 		/*
 		 * Once we hold wait_lock, we're serialized against
 		 * mutex_unlock() handing the lock off to us, do a trylock
@@ -1010,18 +1005,24 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 			goto err;
 		}
 
-		if (ww_ctx) {
+		if (use_ww_ctx && ww_ctx) {
 			ret = __ww_mutex_check_kill(lock, &waiter, ww_ctx);
 			if (ret)
 				goto err;
 		}
 
-		raw_spin_unlock(&lock->wait_lock);
+		spin_unlock(&lock->wait_lock);
 		schedule_preempt_disabled();
 
-		first = __mutex_waiter_is_first(lock, &waiter);
-		if (first)
-			__mutex_set_flag(lock, MUTEX_FLAG_HANDOFF);
+		/*
+		 * ww_mutex needs to always recheck its position since its waiter
+		 * list is not FIFO ordered.
+		 */
+		if ((use_ww_ctx && ww_ctx) || !first) {
+			first = __mutex_waiter_is_first(lock, &waiter);
+			if (first)
+				__mutex_set_flag(lock, MUTEX_FLAG_HANDOFF);
+		}
 
 		set_current_state(state);
 		/*
@@ -1030,16 +1031,16 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 		 * or we must see its unlock and acquire.
 		 */
 		if (__mutex_trylock(lock) ||
-		    (first && mutex_optimistic_spin(lock, ww_ctx, &waiter)))
+		    (first && mutex_optimistic_spin(lock, ww_ctx, use_ww_ctx, &waiter)))
 			break;
 
-		raw_spin_lock(&lock->wait_lock);
+		spin_lock(&lock->wait_lock);
 	}
-	raw_spin_lock(&lock->wait_lock);
+	spin_lock(&lock->wait_lock);
 acquired:
 	__set_current_state(TASK_RUNNING);
 
-	if (ww_ctx) {
+	if (use_ww_ctx && ww_ctx) {
 		/*
 		 * Wound-Wait; we stole the lock (!first_waiter), check the
 		 * waiters as anyone might want to wound us.
@@ -1049,7 +1050,9 @@ acquired:
 			__ww_mutex_check_waiters(lock, ww_ctx);
 	}
 
-	__mutex_remove_waiter(lock, &waiter);
+	mutex_remove_waiter(lock, &waiter, current);
+	if (likely(list_empty(&lock->wait_list)))
+		__mutex_clear_flag(lock, MUTEX_FLAGS);
 
 	debug_mutex_free_waiter(&waiter);
 
@@ -1057,18 +1060,18 @@ skip_wait:
 	/* got the lock - cleanup and rejoice! */
 	lock_acquired(&lock->dep_map, ip);
 
-	if (ww_ctx)
+	if (use_ww_ctx && ww_ctx)
 		ww_mutex_lock_acquired(ww, ww_ctx);
 
-	raw_spin_unlock(&lock->wait_lock);
+	spin_unlock(&lock->wait_lock);
 	preempt_enable();
 	return 0;
 
 err:
 	__set_current_state(TASK_RUNNING);
-	__mutex_remove_waiter(lock, &waiter);
+	mutex_remove_waiter(lock, &waiter, current);
 err_early_kill:
-	raw_spin_unlock(&lock->wait_lock);
+	spin_unlock(&lock->wait_lock);
 	debug_mutex_free_waiter(&waiter);
 	mutex_release(&lock->dep_map, 1, ip);
 	preempt_enable();
@@ -1215,6 +1218,8 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 	 */
 	owner = atomic_long_read(&lock->owner);
 	for (;;) {
+		unsigned long old;
+
 #ifdef CONFIG_DEBUG_MUTEXES
 		DEBUG_LOCKS_WARN_ON(__owner_task(owner) != current);
 		DEBUG_LOCKS_WARN_ON(owner & MUTEX_FLAG_PICKUP);
@@ -1223,15 +1228,19 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 		if (owner & MUTEX_FLAG_HANDOFF)
 			break;
 
-		if (atomic_long_try_cmpxchg_release(&lock->owner, &owner, __owner_flags(owner))) {
+		old = atomic_long_cmpxchg_release(&lock->owner, owner,
+						  __owner_flags(owner));
+		if (old == owner) {
 			if (owner & MUTEX_FLAG_WAITERS)
 				break;
 
 			return;
 		}
+
+		owner = old;
 	}
 
-	raw_spin_lock(&lock->wait_lock);
+	spin_lock(&lock->wait_lock);
 	debug_mutex_unlock(lock);
 	if (!list_empty(&lock->wait_list)) {
 		/* get the first entry from the wait-list: */
@@ -1248,7 +1257,7 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 	if (owner & MUTEX_FLAG_HANDOFF)
 		__mutex_handoff(lock, next);
 
-	raw_spin_unlock(&lock->wait_lock);
+	spin_unlock(&lock->wait_lock);
 
 	wake_up_q(&wake_q);
 }

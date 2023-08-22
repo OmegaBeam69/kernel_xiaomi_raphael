@@ -1083,27 +1083,24 @@ static ssize_t disk_discard_alignment_show(struct device *dev,
 	return sprintf(buf, "%d\n", queue_discard_alignment(disk->queue));
 }
 
-static DEVICE_ATTR(range, S_IRUGO, disk_range_show, NULL);
-static DEVICE_ATTR(ext_range, S_IRUGO, disk_ext_range_show, NULL);
-static DEVICE_ATTR(removable, S_IRUGO, disk_removable_show, NULL);
-static DEVICE_ATTR(ro, S_IRUGO, disk_ro_show, NULL);
-static DEVICE_ATTR(size, S_IRUGO, part_size_show, NULL);
-static DEVICE_ATTR(alignment_offset, S_IRUGO, disk_alignment_offset_show, NULL);
-static DEVICE_ATTR(discard_alignment, S_IRUGO, disk_discard_alignment_show,
-		   NULL);
-static DEVICE_ATTR(capability, S_IRUGO, disk_capability_show, NULL);
-static DEVICE_ATTR(stat, S_IRUGO, part_stat_show, NULL);
-static DEVICE_ATTR(inflight, S_IRUGO, part_inflight_show, NULL);
-static DEVICE_ATTR(badblocks, S_IRUGO | S_IWUSR, disk_badblocks_show,
-		disk_badblocks_store);
+static DEVICE_ATTR(range, 0444, disk_range_show, NULL);
+static DEVICE_ATTR(ext_range, 0444, disk_ext_range_show, NULL);
+static DEVICE_ATTR(removable, 0444, disk_removable_show, NULL);
+static DEVICE_ATTR(ro, 0444, disk_ro_show, NULL);
+static DEVICE_ATTR(size, 0444, part_size_show, NULL);
+static DEVICE_ATTR(alignment_offset, 0444, disk_alignment_offset_show, NULL);
+static DEVICE_ATTR(discard_alignment, 0444, disk_discard_alignment_show, NULL);
+static DEVICE_ATTR(capability, 0444, disk_capability_show, NULL);
+static DEVICE_ATTR(stat, 0444, part_stat_show, NULL);
+static DEVICE_ATTR(inflight, 0444, part_inflight_show, NULL);
+static DEVICE_ATTR(badblocks, 0644, disk_badblocks_show, disk_badblocks_store);
 #ifdef CONFIG_FAIL_MAKE_REQUEST
 static struct device_attribute dev_attr_fail =
-	__ATTR(make-it-fail, S_IRUGO|S_IWUSR, part_fail_show, part_fail_store);
+	__ATTR(make-it-fail, 0644, part_fail_show, part_fail_store);
 #endif
 #ifdef CONFIG_FAIL_IO_TIMEOUT
 static struct device_attribute dev_attr_fail_timeout =
-	__ATTR(io-timeout-fail,  S_IRUGO|S_IWUSR, part_timeout_show,
-		part_timeout_store);
+	__ATTR(io-timeout-fail, 0644, part_timeout_show, part_timeout_store);
 #endif
 
 static struct attribute *disk_attrs[] = {
@@ -1290,28 +1287,21 @@ static int diskstats_show(struct seq_file *seqf, void *v)
 		part_round_stats(gp->queue, cpu, hd);
 		part_stat_unlock();
 		part_in_flight(gp->queue, hd, inflight);
-		seq_printf(seqf, "%4d %7d %s "
-			   "%lu %lu %lu %u "
-			   "%lu %lu %lu %u "
-			   "%u %u %u "
-			   "%lu %lu %lu %u\n",
+		seq_printf(seqf, "%4d %7d %s %lu %lu %lu "
+			   "%u %lu %lu %lu %u %u %u %u\n",
 			   MAJOR(part_devt(hd)), MINOR(part_devt(hd)),
 			   disk_name(gp, hd->partno, buf),
-			   part_stat_read(hd, ios[STAT_READ]),
-			   part_stat_read(hd, merges[STAT_READ]),
-			   part_stat_read(hd, sectors[STAT_READ]),
-			   jiffies_to_msecs(part_stat_read(hd, ticks[STAT_READ])),
-			   part_stat_read(hd, ios[STAT_WRITE]),
-			   part_stat_read(hd, merges[STAT_WRITE]),
-			   part_stat_read(hd, sectors[STAT_WRITE]),
-			   jiffies_to_msecs(part_stat_read(hd, ticks[STAT_WRITE])),
+			   part_stat_read(hd, ios[READ]),
+			   part_stat_read(hd, merges[READ]),
+			   part_stat_read(hd, sectors[READ]),
+			   jiffies_to_msecs(part_stat_read(hd, ticks[READ])),
+			   part_stat_read(hd, ios[WRITE]),
+			   part_stat_read(hd, merges[WRITE]),
+			   part_stat_read(hd, sectors[WRITE]),
+			   jiffies_to_msecs(part_stat_read(hd, ticks[WRITE])),
 			   inflight[0],
 			   jiffies_to_msecs(part_stat_read(hd, io_ticks)),
-			   jiffies_to_msecs(part_stat_read(hd, time_in_queue)),
-			   part_stat_read(hd, ios[STAT_DISCARD]),
-			   part_stat_read(hd, merges[STAT_DISCARD]),
-			   part_stat_read(hd, sectors[STAT_DISCARD]),
-			   jiffies_to_msecs(part_stat_read(hd, ticks[STAT_DISCARD]))
+			   jiffies_to_msecs(part_stat_read(hd, time_in_queue))
 			);
 	}
 	disk_part_iter_exit(&piter);
@@ -1865,9 +1855,9 @@ static ssize_t disk_events_poll_msecs_store(struct device *dev,
 	return count;
 }
 
-static const DEVICE_ATTR(events, S_IRUGO, disk_events_show, NULL);
-static const DEVICE_ATTR(events_async, S_IRUGO, disk_events_async_show, NULL);
-static const DEVICE_ATTR(events_poll_msecs, S_IRUGO|S_IWUSR,
+static const DEVICE_ATTR(events, 0444, disk_events_show, NULL);
+static const DEVICE_ATTR(events_async, 0444, disk_events_async_show, NULL);
+static const DEVICE_ATTR(events_poll_msecs, 0644,
 			 disk_events_poll_msecs_show,
 			 disk_events_poll_msecs_store);
 

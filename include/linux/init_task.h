@@ -228,14 +228,13 @@ extern struct cred init_cred;
 	INIT_TASK_TI(tsk)						\
 	.state		= 0,						\
 	.stack		= init_stack,					\
-	.usage		= REFCOUNT_INIT(2),				\
+	.usage		= ATOMIC_INIT(2),				\
 	.flags		= PF_KTHREAD,					\
 	.prio		= MAX_PRIO-20,					\
 	.static_prio	= MAX_PRIO-20,					\
 	.normal_prio	= MAX_PRIO-20,					\
 	.policy		= SCHED_NORMAL,					\
-	.cpus_ptr	= &tsk.cpus_mask,				\
-	.cpus_mask	= CPU_MASK_ALL,					\
+	.cpus_allowed	= CPU_MASK_ALL,					\
 	.nr_cpus_allowed= NR_CPUS,					\
 	.cpus_requested	= CPU_MASK_ALL,					\
 	.mm		= NULL,						\

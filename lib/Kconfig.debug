@@ -1353,6 +1353,7 @@ config DEBUG_LOCKING_API_SELFTESTS
 
 config LOCK_TORTURE_TEST
 	tristate "torture tests for locking"
+	depends on DEBUG_KERNEL
 	select TORTURE_TEST
 	default n
 	help
@@ -1453,7 +1454,7 @@ config HAVE_DEBUG_BUGVERBOSE
 config DEBUG_BUGVERBOSE
 	bool "Verbose BUG() reporting (adds 70K)" if DEBUG_KERNEL && EXPERT
 	depends on DEBUG_KERNEL
-	default y
+	default n
 	help
 	  Say Y here to make BUG() panics output the file name and line number
 	  of the BUG call as well as the EIP and oops trace.  This aids
@@ -2017,17 +2018,6 @@ config TEST_SYSCTL
 
 	  If unsure, say N.
 
-config MEMCPY_KUNIT_TEST
-	tristate "Test memcpy(), memmove(), and memset() functions at runtime" if !KUNIT_ALL_TESTS
-	depends on KUNIT
-	default KUNIT_ALL_TESTS
-	help
-	  Builds unit tests for memcpy(), memmove(), and memset() functions.
-	  For more information on KUnit and unit tests in general please refer
-	  to the KUnit documentation in Documentation/dev-tools/kunit/.
-
-	  If unsure, say N.
-
 config TEST_UDELAY
 	tristate "udelay test driver"
 	default n
@@ -2157,6 +2147,16 @@ config PANIC_ON_DATA_CORRUPTION
 	 Select this option to upgrade warnings for potentially
 	 recoverable data corruption scenarios to system-halting panics,
 	 for easier detection and debug.
+
+config CC_WERROR
+	bool "Treat all compile warnings as errors"
+	default n
+	help
+	 Select this option to set compiler warnings as errors,
+	 to prevent easily-fixable problems from creeping into
+	 the codebase.
+
+	 If unsure, say N.
 
 source "samples/Kconfig"
 

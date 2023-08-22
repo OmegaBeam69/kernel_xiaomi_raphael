@@ -772,9 +772,10 @@ static DEFINE_PER_CPU(struct work_struct, lru_add_drain_work);
 
 void lru_add_drain_all_cpuslocked(void)
 {
+	static seqcount_t seqcount = SEQCNT_ZERO(seqcount);
 	static DEFINE_MUTEX(lock);
 	static struct cpumask has_work;
-	int cpu;
+	int cpu, seq;
 
 	/*
 	 * Make sure nobody triggers this path before mm_percpu_wq is fully
@@ -783,7 +784,19 @@ void lru_add_drain_all_cpuslocked(void)
 	if (WARN_ON(!mm_percpu_wq))
 		return;
 
+	seq = raw_read_seqcount_latch(&seqcount);
+
 	mutex_lock(&lock);
+
+	/*
+	 * Piggyback on drain started and finished while we waited for lock:
+	 * all pages pended at the time of our enter were drained from vectors.
+	 */
+	if (__read_seqcount_retry(&seqcount, seq))
+		goto done;
+
+	raw_write_seqcount_latch(&seqcount);
+
 	cpumask_clear(&has_work);
 
 	for_each_online_cpu(cpu) {
@@ -804,6 +817,7 @@ void lru_add_drain_all_cpuslocked(void)
 	for_each_cpu(cpu, &has_work)
 		flush_work(&per_cpu(lru_add_drain_work, cpu));
 
+done:
 	mutex_unlock(&lock);
 }
 
@@ -989,11 +1003,11 @@ EXPORT_SYMBOL(__pagevec_lru_add);
  * @pvec:	Where the resulting entries are placed
  * @mapping:	The address_space to search
  * @start:	The starting entry index
- * @nr_entries:	The maximum number of entries
+ * @nr_pages:	The maximum number of pages
  * @indices:	The cache indices corresponding to the entries in @pvec
  *
  * pagevec_lookup_entries() will search for and return a group of up
- * to @nr_entries pages and shadow entries in the mapping.  All
+ * to @nr_pages pages and shadow entries in the mapping.  All
  * entries are placed in @pvec.  pagevec_lookup_entries() takes a
  * reference against actual pages in @pvec.
  *
@@ -1089,11 +1103,18 @@ EXPORT_SYMBOL(pagevec_lookup_range_nr_tag);
  */
 void __init swap_setup(void)
 {
-	/* Tweak for Android devices using zram */
-	page_cluster = 0;
+	unsigned long megs = totalram_pages() >> (20 - PAGE_SHIFT);
 
+	/* Use a smaller cluster for small-memory machines */
+	if (megs < 16)
+		page_cluster = 2;
+	else
+		page_cluster = 0;
 	/*
 	 * Right now other parts of the system means that we
 	 * _really_ don't want to cluster much more
 	 */
+#ifdef CONFIG_OPLUS_MM_HACKS
+	page_cluster = 0;
+#endif /* CONFIG_OPLUS_MM_HACKS */
 }

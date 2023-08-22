@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -663,8 +663,8 @@ struct hal_heic_grid_enable {
 
 enum hal_flip {
 	HAL_FLIP_NONE,
-	HAL_FLIP_HORIZONTAL,
 	HAL_FLIP_VERTICAL,
+	HAL_FLIP_HORIZONTAL,
 	HAL_FLIP_BOTH,
 	HAL_UNUSED_FLIP = 0x10000000,
 };
@@ -1508,7 +1508,8 @@ struct hfi_device {
 
 typedef void (*hfi_cmd_response_callback) (enum hal_command_response cmd,
 			void *data);
-typedef void (*msm_vidc_callback) (u32 response, void *callback);
+typedef void (*msm_vidc_callback) (enum hal_command_response response,
+			void *callback);
 
 struct hfi_device *vidc_hfi_initialize(enum msm_vidc_hfi_type hfi_type,
 		u32 device_id, struct msm_vidc_platform_resources *res,

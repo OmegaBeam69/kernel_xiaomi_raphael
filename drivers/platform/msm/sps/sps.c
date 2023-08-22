@@ -2106,7 +2106,9 @@ int sps_register_bam_device(const struct sps_bam_props *bam_props,
 {
 	struct sps_bam *bam = NULL;
 	void __iomem *virt_addr = NULL;
-	char __maybe_unused bam_name[MAX_MSG_LEN];
+#ifdef CONFIG_IPC_LOGGING
+	char bam_name[MAX_MSG_LEN];
+#endif
 	u32 manage;
 	int ok;
 	int result;

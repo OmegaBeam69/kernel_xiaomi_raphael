@@ -447,7 +447,7 @@ int sysctl_perf_event_mlock __read_mostly = 512 + (PAGE_SIZE / 1024); /* 'free' 
  */
 #define DEFAULT_MAX_SAMPLE_RATE		100000
 #define DEFAULT_SAMPLE_PERIOD_NS	(NSEC_PER_SEC / DEFAULT_MAX_SAMPLE_RATE)
-#define DEFAULT_CPU_TIME_MAX_PERCENT	25
+#define DEFAULT_CPU_TIME_MAX_PERCENT	5
 
 int sysctl_perf_event_sample_rate __read_mostly	= DEFAULT_MAX_SAMPLE_RATE;
 
@@ -3834,8 +3834,8 @@ int perf_event_read_local(struct perf_event *event, u64 *value)
 {
 	unsigned long flags;
 	int ret = 0;
-	int local_cpu;
-	bool readable;
+	int local_cpu = smp_processor_id();
+	bool readable = cpumask_test_cpu(local_cpu, &event->readable_on_cpus);
 	/*
 	 * Disabling interrupts avoids all counter scheduling (context
 	 * switches, timer based rotation and IPIs).
@@ -3859,8 +3859,6 @@ int perf_event_read_local(struct perf_event *event, u64 *value)
 	}
 
 	/* If this is a per-CPU event, it must be for this CPU */
-	local_cpu = raw_smp_processor_id();
-	readable = cpumask_test_cpu(local_cpu, &event->readable_on_cpus);
 	if (!(event->attach_state & PERF_ATTACH_TASK) &&
 	    event->cpu != local_cpu &&
 	    !readable) {
@@ -9753,7 +9751,7 @@ static void account_event(struct perf_event *event)
 			 * call the perf scheduling hooks before proceeding to
 			 * install events that need them.
 			 */
-			synchronize_rcu();
+			synchronize_sched();
 		}
 		/*
 		 * Now that we have waited for the sync_sched(), allow further

@@ -992,7 +992,7 @@ static int smb5_parse_dt(struct smb5 *chip)
 	rc = of_property_read_string(node, "google,usb-port-tz-name",
 				     &chg->usb_port_tz_name);
 	if (rc < 0)
-		pr_debug("cannot read usb-port-tz-name, rc=%d\n", rc);
+		pr_err("cannot read usb-port-tz-name, rc=%d\n", rc);
 
 	return 0;
 }

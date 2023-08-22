@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
  * Copyright (C) 2006-2007 Adam Belay <abelay@novell.com>
  * Copyright (C) 2009 Intel Corporation
  *
@@ -35,6 +35,7 @@
 #include <linux/sched.h>
 #include <linux/cpu_pm.h>
 #include <linux/cpuhotplug.h>
+#include <linux/regulator/machine.h>
 #include <linux/sched/clock.h>
 #include <soc/qcom/pm.h>
 #include <soc/qcom/event_timer.h>
@@ -61,6 +62,9 @@ static struct system_pm_ops *sys_pm_ops;
 
 
 struct lpm_cluster *lpm_root_node;
+
+static uint32_t bias_hyst;
+module_param_named(bias_hyst, bias_hyst, uint, 0664);
 
 static DEFINE_PER_CPU(struct lpm_cpu*, cpu_lpm);
 static bool suspend_in_progress;
@@ -248,10 +252,10 @@ static int cluster_configure(struct lpm_cluster *cluster, int idx,
 
 	if (level->notify_rpm) {
 		/*
-		 * Print the clocks which are enabled during system suspend
-		 * This debug information is useful to know which are the
-		 * clocks that are enabled and preventing the system level
-		 * LPMs(XO and Vmin).
+		 * Print the clocks and regulators which are enabled during
+		 * system suspend.  This debug information is useful to know
+		 * which resources are enabled and preventing the system level
+		 * LPMs (XO and Vmin).
 		 */
 		if (!from_idle)
 			clock_debug_print_enabled(false);

@@ -298,6 +298,11 @@ struct mem_cgroup {
 
 extern struct mem_cgroup *root_mem_cgroup;
 
+static inline bool mem_cgroup_is_root(struct mem_cgroup *memcg)
+{
+	return (memcg == root_mem_cgroup);
+}
+
 static inline bool mem_cgroup_disabled(void)
 {
 	return !cgroup_subsys_enabled(memory_cgrp_subsys);
@@ -778,6 +783,11 @@ void mem_cgroup_split_huge_fixup(struct page *head);
 
 struct mem_cgroup;
 
+static inline bool mem_cgroup_is_root(struct mem_cgroup *memcg)
+{
+	return true;
+}
+
 static inline bool mem_cgroup_disabled(void)
 {
 	return true;
@@ -1202,6 +1212,10 @@ static inline void mem_cgroup_wb_stats(struct bdi_writeback *wb,
 				       unsigned long *pdirty,
 				       unsigned long *pwriteback)
 {
+	*pfilepages = 0;
+	*pheadroom = 0;
+	*pdirty = 0;
+	*pwriteback = 0;
 }
 
 #endif	/* CONFIG_CGROUP_WRITEBACK */

@@ -28,6 +28,8 @@
 
 #define MULTIPLE_CONN_DETECTED(x) (x > 1)
 
+
+
 static BLOCKING_NOTIFIER_HEAD(msm_drm_notifier_list);
 static LLIST_HEAD(msm_atomic_state_cache);
 static DEFINE_SPINLOCK(msm_atomic_cache_lock);
@@ -108,6 +110,8 @@ static void end_atomic(struct msm_drm_private *priv, uint32_t crtc_mask,
 	wake_up_all_locked(&priv->pending_crtcs_event);
 	spin_unlock(&priv->pending_crtcs_event.lock);
 }
+
+
 
 static inline bool _msm_seamless_for_crtc(struct drm_atomic_state *state,
 			struct drm_crtc_state *crtc_state, bool enable)
@@ -600,6 +604,7 @@ static void msm_atomic_commit_dispatch(struct drm_device *dev,
 	struct drm_crtc_state *crtc_state = NULL;
 	int ret = -EINVAL, i = 0, j = 0;
 
+
 	for_each_crtc_in_state(state, crtc, crtc_state, i) {
 		for (j = 0; j < priv->num_crtcs; j++) {
 			if (priv->disp_thread[j].crtc_id ==
@@ -642,6 +647,8 @@ static void msm_atomic_commit_dispatch(struct drm_device *dev,
 	} else if (!nonblock) {
 		kthread_flush_work(&commit->commit_work);
 	}
+
+
 }
 
 /**
@@ -720,11 +727,12 @@ retry:
 		goto error;
 
 	BUG_ON(drm_atomic_helper_swap_state(state, false) < 0);
+
 	if (!atomic_cmpxchg_acquire(&priv->pm_req_set, 1, 0))
 		pm_qos_update_request(&priv->pm_irq_req, 100);
 	mod_delayed_work(system_unbound_wq, &priv->pm_unreq_dwork, HZ / 10);
-
 #ifdef CONFIG_DRM_MSM_MDP5
+
 	/*
 	 * This is the point of no return - everything below never fails except
 	 * when the hw goes bonghits. Which means we can commit the new state on
@@ -766,6 +774,7 @@ retry:
 
 	SDE_ATRACE_END("atomic_commit");
 	return 0;
+
 
 error:
 	drm_atomic_helper_cleanup_planes(dev, state);

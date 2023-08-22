@@ -41,17 +41,19 @@ config ARM64
 	select ARCH_INLINE_WRITE_UNLOCK_IRQRESTORE if !PREEMPT
 	select ARCH_USE_CMPXCHG_LOCKREF
 	select ARCH_USE_QUEUED_RWLOCKS
+	select ARCH_USE_QUEUED_SPINLOCKS
 	select ARCH_SUPPORTS_MEMORY_FAILURE
 	select ARCH_SUPPORTS_LTO_CLANG
 	select ARCH_SUPPORTS_THINLTO
 	select ARCH_SUPPORTS_SHADOW_CALL_STACK
 	select ARCH_USE_QUEUED_SPINLOCKS
 	select ARCH_SUPPORTS_ATOMIC_RMW
+	select ARCH_SUPPORTS_INT128
 	select ARCH_SUPPORTS_NUMA_BALANCING
-	select ARCH_USE_QUEUED_SPINLOCKS
 	select ARCH_WANT_COMPAT_IPC_PARSE_VERSION
 	select ARCH_WANT_FRAME_POINTERS
 	select ARCH_HAS_UBSAN_SANITIZE_ALL
+	select ARCH_HAS_SET_MEMORY
 	select ARM_AMBA
 	select ARM_ARCH_TIMER
 	select ARM_GIC
@@ -64,7 +66,7 @@ config ARM64
 	select CLONE_BACKWARDS
 	select COMMON_CLK if !ARCH_QCOM
 	select CPU_PM if (SUSPEND || CPU_IDLE)
-	select CRC32
+    select CRC32
 	select DCACHE_WORD_ACCESS
 	select EDAC_SUPPORT
 	select FRAME_POINTER
@@ -96,14 +98,13 @@ config ARM64
 	select HAVE_ARCH_BITREVERSE
 	select HAVE_ARCH_HUGE_VMAP
 	select HAVE_ARCH_JUMP_LABEL
-	select HAVE_ARCH_JUMP_LABEL_RELATIVE
 	select HAVE_ARCH_KASAN if !(ARM64_16K_PAGES && ARM64_VA_BITS_48)
 	select HAVE_ARCH_KASAN_SW_TAGS if HAVE_ARCH_KASAN
+	select HAVE_ARCH_JUMP_LABEL_RELATIVE
 	select HAVE_ARCH_KGDB
 	select HAVE_ARCH_MMAP_RND_BITS
 	select HAVE_ARCH_MMAP_RND_COMPAT_BITS if COMPAT
 	select HAVE_ARCH_SECCOMP_FILTER
-	select HAVE_ARCH_THREAD_STRUCT_WHITELIST
 	select HAVE_ARCH_TRACEHOOK
 	select HAVE_ARCH_TRANSPARENT_HUGEPAGE
 	select HAVE_ARCH_VMAP_STACK
@@ -150,7 +151,6 @@ config ARM64
 	select OF_EARLY_FLATTREE
 	select OF_RESERVED_MEM
 	select PCI_ECAM if ACPI
-	select PCI_LOCKLESS_CONFIG if PCI && ARCH_QCOM
 	select POWER_RESET
 	select POWER_SUPPLY
 	select SPARSE_IRQ
@@ -540,7 +540,7 @@ config ARM64_ERRATUM_1024718
 	help
 	  This option adds work around for Arm Cortex-A55 Erratum 1024718.
 
-	  Affected Cortex-A55 cores (r0p0, r0p1, r1p0) could cause incorrect
+	  Affected Cortex-A55 cores (all revisions) could cause incorrect
 	  update of the hardware dirty bit when the DBM/AP bits are updated
 	  without a break-before-make. The work around is to disable the usage
 	  of hardware DBM locally on the affected cores. CPUs not affected by
@@ -567,8 +567,8 @@ config ARM64_ERRATUM_1286807
 config ARM64_ERRATUM_1188873
 	bool "Cortex-A76: MRC read following MRRC read of specific Generic Timer in AArch32 might give incorrect result"
 	default y
-        depends on COMPAT
-        select ARM_ARCH_TIMER_OOL_WORKAROUND
+	depends on COMPAT
+	select ARM_ARCH_TIMER_OOL_WORKAROUND
 	help
 	  This option adds work arounds for ARM Cortex-A76 erratum 1188873
 
@@ -808,6 +808,33 @@ config BIG_CPU_MASK
 	  This is a bitmask specifying which of the CPUs are big in a
 	  heterogeneous system. Use 0 if you are unsure, which just results in
 	  this storing the bitmask of all available CPUs.
+
+config BIG_CPU_FIRST_MASK
+	int "Bitmask of the first big CPU"
+	default 0
+	help
+	  This bitmask specifies the first big CPU which is cpu4 for a Big.Little
+	  chipset having three CPUs (cpu4 and cpu5 and cpu6) on the Big cluster.
+	  
+	  Set it 0 if you are unsure.
+
+config BIG_CPU_SECOND_MASK
+	int "Bitmask of the second big CPU"
+	default 0
+	help
+	  This bitmask specifies the second big CPU which is cpu5 for a Big.Little
+	  chipset having three CPUs (cpu4 and cpu5 and cpu6) on the Big cluster.
+	  
+	  Set it 0 if you are unsure.
+
+config BIG_CPU_THIRD_MASK
+	int "Bitmask of the third big CPU"
+	default 0
+	help
+	  This bitmask specifies the third big CPU which is cpu6 for a Big.Little
+	  chipset having three CPUs (cpu4 and cpu5 and cpu6) on the Big cluster.
+	  
+	  Set it 0 if you are unsure.
 
 config PRIME_CPU_MASK
 	int "Bitmask of available prime CPUs"
@@ -1093,6 +1120,16 @@ config ARM64_SSBD
 	  by speculative loads.
 
 	  If unsure, say Y.
+
+config MITIGATE_SPECTRE_BRANCH_HISTORY
+	bool "Mitigate Spectre style attacks against branch history" if EXPERT
+	default y
+	depends on HARDEN_BRANCH_PREDICTOR || !KVM
+	help
+	  Speculation attacks against some high-performance processors can
+	  make use of branch history to influence future speculation.
+	  When taking an exception from user-space, a sequence of branches
+	  or a firmware call overwrites the branch history.
 
 config ARM64_TAGGED_ADDR_ABI
 	bool "Enable the tagged user addresses syscall ABI"
@@ -1558,10 +1595,10 @@ config COMPAT_VDSO
 	help
 	  Warning: a 32-bit toolchain is necessary to build the vDSO. You
 	  must explicitly define which toolchain should be used by setting
-	  CROSS_COMPILE_COMPAT to the prefix of the 32-bit toolchain (same format
-	  as CROSS_COMPILE). If CROSS_COMPILE_COMPAT is empty, a warning will be
+	  CROSS_COMPILE_ARM32 to the prefix of the 32-bit toolchain (same format
+	  as CROSS_COMPILE). If CROSS_COMPILE_ARM32 is empty, a warning will be
 	  printed and the kernel will be built as if COMPAT_VDSO had not been
-	  set. If CROSS_COMPILE_COMPAT is set to an invalid prefix, compilation
+	  set. If CROSS_COMPILE_ARM32 is set to an invalid prefix, compilation
 	  will be aborted.
 
 	  Provide a vDSO to 32-bit processes. It includes the symbols provided
@@ -1569,10 +1606,10 @@ config COMPAT_VDSO
 	  the compat vDSO without modification. It also provides sigreturn
 	  trampolines, replacing the sigreturn page.
 
-config CROSS_COMPILE_COMPAT
+config CROSS_COMPILE_ARM32
 	string "32-bit toolchain prefix"
 	help
-	  Same as setting CROSS_COMPILE_COMPAT in the environment, but saved for
+	  Same as setting CROSS_COMPILE_ARM32 in the environment, but saved for
 	  future builds. The environment variable overrides this config option.
 
 endmenu

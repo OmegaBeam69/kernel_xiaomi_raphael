@@ -1862,9 +1862,6 @@ static int pstate_cmp(const void *a, const void *b)
 	int rc = 0;
 	int pa_zpos, pb_zpos;
 
-	if ((!pa || !pa->sde_pstate) || (!pb || !pb->sde_pstate))
-		return rc;
-
 	pa_zpos = sde_plane_get_property(pa->sde_pstate, PLANE_PROP_ZPOS);
 	pb_zpos = sde_plane_get_property(pb->sde_pstate, PLANE_PROP_ZPOS);
 
@@ -2036,7 +2033,6 @@ static void _sde_crtc_blend_setup_mixer(struct drm_crtc *crtc,
 	int zpos_cnt[SDE_STAGE_MAX + 1] = { 0 };
 	int i, rot_id = 0, cnt = 0;
 	bool bg_alpha_enable = false;
-	bool is_video_mode;
 
 	if (!sde_crtc || !crtc->state || !mixer) {
 		SDE_ERROR("invalid sde_crtc or mixer\n");
@@ -2048,10 +2044,7 @@ static void _sde_crtc_blend_setup_mixer(struct drm_crtc *crtc,
 	stage_cfg = &sde_crtc->stage_cfg;
 	cstate = to_sde_crtc_state(crtc->state);
 
-	is_video_mode = sde_encoder_check_curr_mode(sde_crtc->mixers[0].encoder,
-					       MSM_DISPLAY_CAP_VID_MODE);
-	if (is_video_mode)
-		cstate->sbuf_prefill_line = _sde_crtc_calc_inline_prefill(crtc);
+	cstate->sbuf_prefill_line = _sde_crtc_calc_inline_prefill(crtc);
 	sde_crtc->sbuf_rot_id_old = sde_crtc->sbuf_rot_id;
 	sde_crtc->sbuf_rot_id = 0x0;
 	sde_crtc->sbuf_rot_id_delta = 0x0;
@@ -2070,11 +2063,9 @@ static void _sde_crtc_blend_setup_mixer(struct drm_crtc *crtc,
 		fb = state->fb;
 
 		/* assume all rotated planes report the same prefill amount */
-		if (is_video_mode) {
-			prefill = sde_plane_rot_get_prefill(plane);
-			if (prefill)
-				cstate->sbuf_prefill_line = prefill;
-		}
+		prefill = sde_plane_rot_get_prefill(plane);
+		if (prefill)
+			cstate->sbuf_prefill_line = prefill;
 
 		sde_plane_ctl_flush(plane, ctl, true);
 		rot_id = sde_plane_get_sbuf_id(plane);
@@ -2798,12 +2789,12 @@ static void sde_crtc_frame_event_cb(void *data, u32 event)
 	SDE_DEBUG("crtc%d\n", crtc->base.id);
 	SDE_EVT32_VERBOSE(DRMID(crtc), event);
 
-	spin_lock_irqsave(&sde_crtc->fevent_spin_lock, flags);
+	spin_lock_irqsave(&sde_crtc->spin_lock, flags);
 	fevent = list_first_entry_or_null(&sde_crtc->frame_event_list,
 			struct sde_crtc_frame_event, list);
 	if (fevent)
 		list_del_init(&fevent->list);
-	spin_unlock_irqrestore(&sde_crtc->fevent_spin_lock, flags);
+	spin_unlock_irqrestore(&sde_crtc->spin_lock, flags);
 
 	if (!fevent) {
 		SDE_ERROR("crtc%d event %d overflow\n",
@@ -3062,10 +3053,10 @@ static void sde_crtc_frame_event_work(struct kthread_work *work)
 		SDE_ERROR("crtc%d ts:%lld received panel dead event\n",
 				crtc->base.id, ktime_to_ns(fevent->ts));
 
-	spin_lock_irqsave(&sde_crtc->fevent_spin_lock, flags);
+	spin_lock_irqsave(&sde_crtc->spin_lock, flags);
 	list_add_tail(&fevent->list, &sde_crtc->frame_event_list);
-	spin_unlock_irqrestore(&sde_crtc->fevent_spin_lock, flags);
-        SDE_ATRACE_END("crtc_frame_event");
+	spin_unlock_irqrestore(&sde_crtc->spin_lock, flags);
+	SDE_ATRACE_END("crtc_frame_event");
 }
 
 void sde_crtc_complete_commit(struct drm_crtc *crtc,
@@ -3734,9 +3725,9 @@ static void sde_crtc_atomic_begin(struct drm_crtc *crtc,
 		return;
 	}
 
-	if (!crtc->state->active) {
-		SDE_DEBUG("crtc%d -> active %d, skip atomic_begin\n",
-				crtc->base.id, crtc->state->active);
+	if (!crtc->state->enable) {
+		SDE_DEBUG("crtc%d -> enable %d, skip atomic_begin\n",
+				crtc->base.id, crtc->state->enable);
 		return;
 	}
 
@@ -6960,7 +6951,6 @@ struct drm_crtc *sde_crtc_init(struct drm_device *dev, struct drm_plane *plane)
 
 	mutex_init(&sde_crtc->crtc_lock);
 	spin_lock_init(&sde_crtc->spin_lock);
-	spin_lock_init(&sde_crtc->fevent_spin_lock);
 	atomic_set(&sde_crtc->frame_pending, 0);
 
 	mutex_init(&sde_crtc->rp_lock);

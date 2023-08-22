@@ -1021,6 +1021,25 @@ int submit_bio_wait(struct bio *bio)
 }
 EXPORT_SYMBOL(submit_bio_wait);
 
+static void submit_bio_nowait_endio(struct bio *bio)
+{
+	bio_put(bio);
+}
+
+/**
+ * submit_bio_nowait - submit a bio for fire-and-forget
+ * @bio: The &struct bio which describes the I/O
+ *
+ * Simple wrapper around submit_bio() that takes care of bio_put() on completion
+ */
+void submit_bio_nowait(struct bio *bio)
+{
+	bio->bi_end_io = submit_bio_nowait_endio;
+	bio->bi_opf |= REQ_SYNC;
+	submit_bio(bio);
+}
+EXPORT_SYMBOL(submit_bio_nowait);
+
 /**
  * bio_advance - increment/complete a bio by some number of bytes
  * @bio:	bio to advance
@@ -1789,31 +1808,29 @@ void bio_check_pages_dirty(struct bio *bio)
 	}
 }
 
-void generic_start_io_acct(struct request_queue *q, int op,
+void generic_start_io_acct(struct request_queue *q, int rw,
 			   unsigned long sectors, struct hd_struct *part)
 {
-	const int sgrp = op_stat_group(op);
 	int cpu = part_stat_lock();
 
 	part_round_stats(q, cpu, part);
-	part_stat_inc(cpu, part, ios[sgrp]);
-	part_stat_add(cpu, part, sectors[sgrp], sectors);
-	part_inc_in_flight(q, part, op_is_write(op));
+	part_stat_inc(cpu, part, ios[rw]);
+	part_stat_add(cpu, part, sectors[rw], sectors);
+	part_inc_in_flight(q, part, rw);
 
 	part_stat_unlock();
 }
 EXPORT_SYMBOL(generic_start_io_acct);
 
-void generic_end_io_acct(struct request_queue *q, int req_op,
+void generic_end_io_acct(struct request_queue *q, int rw,
 			 struct hd_struct *part, unsigned long start_time)
 {
 	unsigned long duration = jiffies - start_time;
-	const int sgrp = op_stat_group(req_op);
 	int cpu = part_stat_lock();
 
-	part_stat_add(cpu, part, ticks[sgrp], duration);
+	part_stat_add(cpu, part, ticks[rw], duration);
 	part_round_stats(q, cpu, part);
-	part_dec_in_flight(q, part, op_is_write(req_op));
+	part_dec_in_flight(q, part, rw);
 
 	part_stat_unlock();
 }

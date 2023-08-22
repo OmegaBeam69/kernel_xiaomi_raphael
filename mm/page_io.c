@@ -73,6 +73,22 @@ void end_swap_bio_write(struct bio *bio)
 	bio_put(bio);
 }
 
+/* Moto huangzq2: check sync_io state on swap entry */
+bool swap_slot_has_sync_io(swp_entry_t entry)
+{
+	struct swap_info_struct *sis;
+	struct gendisk *disk;
+
+	sis = swp_swap_info(entry);
+	disk = sis->bdev->bd_disk;
+	if (disk->fops->ioctl) {
+		return disk->fops->ioctl(sis->bdev, 0,
+			SWP_SYNCHRONOUS_IO, swp_offset(entry)) == 1;
+	}
+
+	return false;
+}
+
 static void swap_slot_free_notify(struct page *page)
 {
 	struct swap_info_struct *sis;
@@ -355,6 +371,7 @@ int swap_readpage(struct page *page, bool synchronous)
 	struct swap_info_struct *sis = page_swap_info(page);
 	blk_qc_t qc;
 	struct gendisk *disk;
+	bool workingset = PageWorkingset(page);
 	unsigned long pflags;
 
 	VM_BUG_ON_PAGE(!PageSwapCache(page) && !synchronous, page);
@@ -366,7 +383,8 @@ int swap_readpage(struct page *page, bool synchronous)
 	 * or the submitting cgroup IO-throttled, submission can be a
 	 * significant part of overall IO time.
 	 */
-	psi_memstall_enter(&pflags);
+	if (workingset)
+		psi_memstall_enter(&pflags);
 
 	if (frontswap_load(page) == 0) {
 		SetPageUptodate(page);

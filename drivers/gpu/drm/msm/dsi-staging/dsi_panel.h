@@ -86,6 +86,13 @@ struct dsi_dfps_capabilities {
 	bool dfps_support;
 };
 
+struct dsi_qsync_capabilities {
+	/* qsync disabled if qsync_min_fps = 0 */
+	u32 qsync_min_fps;
+	u32 *qsync_min_fps_list;
+	int qsync_min_fps_list_len;
+};
+
 struct dsi_dyn_clk_caps {
 	bool dyn_clk_support;
 	u32 *bit_clk_list;
@@ -222,7 +229,7 @@ struct dsi_panel {
 
 	bool panel_initialized;
 	bool te_using_watchdog_timer;
-	u32 qsync_min_fps;
+	struct dsi_qsync_capabilities qsync_caps;
 
 	char dsc_pps_cmd[DSI_CMD_PPS_SIZE];
 	enum dsi_dms_mode dms_mode;
@@ -368,13 +375,13 @@ int dsi_panel_parse_esd_reg_read_configs(struct dsi_panel *panel);
 
 void dsi_panel_ext_bridge_put(struct dsi_panel *panel);
 
+void dsi_panel_calc_dsi_transfer_time(struct dsi_host_common_cfg *config,
+		struct dsi_display_mode *mode, u32 frame_threshold_us);
+
 u8 dsi_panel_get_fod_dim_alpha(struct dsi_panel *panel);
 u8 dsi_panel_get_dc_dim_alpha(struct dsi_panel *panel);
 
 int dsi_panel_apply_hbm_mode(struct dsi_panel *panel);
-
-void dsi_panel_calc_dsi_transfer_time(struct dsi_host_common_cfg *config,
-		struct dsi_display_mode *mode, u32 frame_threshold_us);
 
 int dsi_panel_set_fod_hbm(struct dsi_panel *panel, bool status);
 bool dsi_panel_get_fod_ui(struct dsi_panel *panel);

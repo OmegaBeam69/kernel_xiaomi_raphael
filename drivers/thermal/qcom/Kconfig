@@ -143,7 +143,7 @@ config QTI_BUS_SCALING_COOLING_DEVICE
 	   devices will be used by QTI chipset to place a DDR state request
 	   to meet the performance requirement under thermally constrained
 	   conditions.
-
+	   
 config MSM_THERMAL_SIMPLE
 	bool "Simple solution to monitor temperature and limit CPU frequency"
 	default n

@@ -3011,6 +3011,7 @@ static int rmnet_ipa_ap_suspend(struct device *dev)
 	}
 
 	/* Make sure that there is no Tx operation ongoing */
+	netif_stop_queue(netdev);
 	netif_device_detach(netdev);
 	spin_unlock_irqrestore(&wwan_ptr->lock, flags);
 

@@ -1505,8 +1505,14 @@ static int dsi_panel_parse_qsync_caps(struct dsi_panel *panel,
 				     struct device_node *of_node)
 {
 	int rc = 0;
-	u32 val = 0;
+	u32 val = 0, i;
+	struct dsi_qsync_capabilities *qsync_caps = &panel->qsync_caps;
+	struct dsi_parser_utils *utils = &panel->utils;
 
+	/**
+	 * "mdss-dsi-qsync-min-refresh-rate" is defined in cmd mode and
+	 *  video mode when there is only one qsync min fps present.
+	 */
 	rc = of_property_read_u32(of_node,
 				  "qcom,mdss-dsi-qsync-min-refresh-rate",
 				  &val);
@@ -1514,7 +1520,71 @@ static int dsi_panel_parse_qsync_caps(struct dsi_panel *panel,
 		pr_debug("[%s] qsync min fps not defined rc:%d\n",
 			panel->name, rc);
 
-	panel->qsync_min_fps = val;
+	qsync_caps->qsync_min_fps = val;
+
+	/**
+	 * "dsi-supported-qsync-min-fps-list" may be defined in video
+	 *  mode, only in dfps case when "qcom,dsi-supported-dfps-list"
+	 *  is defined.
+	 */
+	qsync_caps->qsync_min_fps_list_len = utils->count_u32_elems(utils->data,
+				  "qcom,dsi-supported-qsync-min-fps-list");
+	if (qsync_caps->qsync_min_fps_list_len < 1)
+		goto qsync_support;
+
+	/**
+	 * qcom,dsi-supported-qsync-min-fps-list cannot be defined
+	 *  along with qcom,mdss-dsi-qsync-min-refresh-rate.
+	 */
+	if (qsync_caps->qsync_min_fps_list_len >= 1 &&
+		qsync_caps->qsync_min_fps) {
+		rc = -EINVAL;
+		goto error;
+	}
+
+	if (panel->dfps_caps.dfps_list_len !=
+			qsync_caps->qsync_min_fps_list_len) {
+		rc = -EINVAL;
+		goto error;
+	}
+
+	qsync_caps->qsync_min_fps_list =
+		kcalloc(qsync_caps->qsync_min_fps_list_len, sizeof(u32),
+			GFP_KERNEL);
+	if (!qsync_caps->qsync_min_fps_list) {
+		rc = -ENOMEM;
+		goto error;
+	}
+
+	rc = utils->read_u32_array(utils->data,
+			"qcom,dsi-supported-qsync-min-fps-list",
+			qsync_caps->qsync_min_fps_list,
+			qsync_caps->qsync_min_fps_list_len);
+	if (rc) {
+		rc = -EINVAL;
+		goto error;
+	}
+
+	qsync_caps->qsync_min_fps = qsync_caps->qsync_min_fps_list[0];
+
+	for (i = 1; i < qsync_caps->qsync_min_fps_list_len; i++) {
+		if (qsync_caps->qsync_min_fps_list[i] <
+				qsync_caps->qsync_min_fps)
+			qsync_caps->qsync_min_fps =
+				qsync_caps->qsync_min_fps_list[i];
+	}
+
+qsync_support:
+	/* allow qsync support only if DFPS is with VFP approach */
+	if ((panel->dfps_caps.dfps_support) &&
+	    !(panel->dfps_caps.type == DSI_DFPS_IMMEDIATE_VFP))
+		panel->qsync_caps.qsync_min_fps = 0;
+
+error:
+	if (rc < 0) {
+		qsync_caps->qsync_min_fps = 0;
+		qsync_caps->qsync_min_fps_list_len = 0;
+	}
 
 	return rc;
 }
@@ -2238,16 +2308,22 @@ static int dsi_panel_parse_misc_features(struct dsi_panel *panel)
 	struct dsi_parser_utils *utils = &panel->utils;
 	u32 val;
 
+#ifdef CONFIG_DSI_FEATURES
+	panel->ulps_feature_enabled = true;
+	panel->ulps_suspend_enabled = true;
+#else
 	panel->ulps_feature_enabled =
 		utils->read_bool(utils->data, "qcom,ulps-enabled");
 
 	pr_info("%s: ulps feature %s\n", __func__,
 		(panel->ulps_feature_enabled ? "enabled" : "disabled"));
 
-	panel->ulps_suspend_enabled = true;
+	panel->ulps_suspend_enabled =
+		utils->read_bool(utils->data, "qcom,suspend-ulps-enabled");
 
 	pr_info("%s: ulps during suspend feature %s", __func__,
 		(panel->ulps_suspend_enabled ? "enabled" : "disabled"));
+#endif
 
 	panel->te_using_watchdog_timer = utils->read_bool(utils->data,
 					"qcom,mdss-dsi-te-using-wd");
@@ -2633,6 +2709,24 @@ static int dsi_panel_parse_bl_config(struct dsi_panel *panel)
 
 	panel->bl_config.bl_inverted_dbv = utils->read_bool(utils->data,
 		"qcom,mdss-dsi-bl-inverted-dbv");
+
+	rc = utils->read_u32(utils->data,
+			"qcom,disp-doze-lpm-backlight", &val);
+	if (rc) {
+		panel->bl_config.bl_doze_lpm = 0;
+		pr_debug("set doze lpm backlight to 0\n");
+	} else {
+		panel->bl_config.bl_doze_lpm = val;
+	}
+
+	rc = utils->read_u32(utils->data,
+			"qcom,disp-doze-hbm-backlight", &val);
+	if (rc) {
+		panel->bl_config.bl_doze_hbm = 0;
+		pr_debug("set doze hbm backlight to 0\n");
+	} else {
+		panel->bl_config.bl_doze_hbm = val;
+	}
 
 	rc = dsi_panel_parse_fod_dim_lut(panel, utils);
 	if (rc)
@@ -3629,11 +3723,6 @@ struct dsi_panel *dsi_panel_get(struct device *parent,
 	if (rc)
 		pr_debug("failed to parse qsync features, rc=%d\n", rc);
 
-	/* allow qsync support only if DFPS is with VFP approach */
-	if ((panel->dfps_caps.dfps_support) &&
-	    !(panel->dfps_caps.type == DSI_DFPS_IMMEDIATE_VFP))
-		panel->qsync_min_fps = 0;
-
 	rc = dsi_panel_parse_dyn_clk_caps(panel);
 	if (rc)
 		pr_debug("failed to parse dynamic clk config, rc=%d\n", rc);
@@ -4484,7 +4573,6 @@ int dsi_panel_set_lp1(struct dsi_panel *panel)
 	if (rc)
 		pr_debug("[%s] failed to send DSI_CMD_SET_LP1 cmd, rc=%d\n",
 		       panel->name, rc);
-
 exit:
 	mutex_unlock(&panel->panel_lock);
 	return rc;
@@ -4507,7 +4595,6 @@ int dsi_panel_set_lp2(struct dsi_panel *panel)
 	if (rc)
 		pr_debug("[%s] failed to send DSI_CMD_SET_LP2 cmd, rc=%d\n",
 		       panel->name, rc);
-
 exit:
 	mutex_unlock(&panel->panel_lock);
 	return rc;
@@ -4538,7 +4625,6 @@ int dsi_panel_set_nolp(struct dsi_panel *panel)
 	if (rc)
 		pr_debug("[%s] failed to send DSI_CMD_SET_NOLP cmd, rc=%d\n",
 		       panel->name, rc);
-
 exit:
 	mutex_unlock(&panel->panel_lock);
 	return rc;
@@ -4552,6 +4638,7 @@ int dsi_panel_prepare(struct dsi_panel *panel)
 		pr_debug("invalid params\n");
 		return -EINVAL;
 	}
+
 	mutex_lock(&panel->panel_lock);
 
 	if (panel->init_delay_us)
@@ -4877,7 +4964,7 @@ int dsi_panel_enable(struct dsi_panel *panel)
 		panel->panel_initialized = true;
 	mutex_unlock(&panel->panel_lock);
 
-	if (panel->hbm_mode)
+  if (panel->hbm_mode)
 		dsi_panel_apply_hbm_mode(panel);
 
 	return rc;

@@ -314,7 +314,18 @@ struct vma_swap_readahead {
 void *workingset_eviction(struct address_space *mapping, struct page *page);
 void workingset_refault(struct page *page, void *shadow);
 void workingset_activation(struct page *page);
-void workingset_update_node(struct radix_tree_node *node, void *private);
+
+/* Do not use directly, use workingset_lookup_update */
+void workingset_update_node(struct radix_tree_node *node);
+
+/* Returns workingset_update_node() if the mapping has shadow entries. */
+#define workingset_lookup_update(mapping)				\
+({									\
+	radix_tree_update_node_t __helper = workingset_update_node;	\
+	if (dax_mapping(mapping) || shmem_mapping(mapping))		\
+		__helper = NULL;					\
+	__helper;							\
+})
 
 /* linux/mm/page_alloc.c */
 extern unsigned long totalreserve_pages;
@@ -375,6 +386,7 @@ extern int sysctl_swap_ratio_enable;
 extern int remove_mapping(struct address_space *mapping, struct page *page);
 extern unsigned long vm_total_pages;
 
+extern unsigned long reclaim_pages(struct list_head *page_list);
 #ifdef CONFIG_NUMA
 extern int node_reclaim_mode;
 extern int sysctl_min_unmapped_ratio;
@@ -400,6 +412,7 @@ extern void end_swap_bio_write(struct bio *bio);
 extern int __swap_writepage(struct page *page, struct writeback_control *wbc,
 	bio_end_io_t end_write_func);
 extern int swap_set_page_dirty(struct page *page);
+extern bool swap_slot_has_sync_io(swp_entry_t entry);
 
 int add_swap_extent(struct swap_info_struct *sis, unsigned long start_page,
 		unsigned long nr_pages, sector_t start_block);

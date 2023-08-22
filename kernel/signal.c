@@ -1336,11 +1336,8 @@ int group_send_sig_info(int sig, struct siginfo *info, struct task_struct *p)
 	ret = check_kill_permission(sig, info, p);
 	rcu_read_unlock();
 
-	if (!ret && sig) {
+	if (!ret && sig)
 		ret = do_send_sig_info(sig, info, p, true);
-		if (capable(CAP_KILL) && sig == SIGKILL)
-			add_to_oom_reaper(p);
-	}
 
 	return ret;
 }
@@ -3130,8 +3127,11 @@ static bool access_pidfd_pidns(struct pid *pid)
 
 static struct pid *pidfd_to_pid(const struct file *file)
 {
-	if (file->f_op == &pidfd_fops)
-		return file->private_data;
+	struct pid *pid;
+
+	pid = pidfd_pid(file);
+	if (!IS_ERR(pid))
+		return pid;
 
 	return tgid_pidfd_to_pid(file);
 }

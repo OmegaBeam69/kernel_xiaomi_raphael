@@ -18,7 +18,6 @@
 #include <linux/wait.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
-#include <linux/pm_qos.h>
 #include <linux/dma-mapping.h>
 #include <sound/soc.h>
 #include <sound/info.h>
@@ -1012,13 +1011,6 @@ static void wcd_cpe_ssr_work(struct work_struct *work)
 		return;
 	}
 
-	/* Obtain pm request up in case of suspend mode */
-	pm_qos_add_request(&core->pm_qos_req,
-			   PM_QOS_CPU_DMA_LATENCY,
-			   PM_QOS_DEFAULT_VALUE);
-	pm_qos_update_request(&core->pm_qos_req,
-			msm_cpuidle_get_deep_idle_latency());
-
 	dev_dbg(core->dev,
 		"%s: CPE SSR with event %d\n",
 		__func__, core->ssr_type);
@@ -1053,7 +1045,7 @@ static void wcd_cpe_ssr_work(struct work_struct *work)
 			dev_err(core->dev,
 				"%s: wait for cpe offline timed out\n",
 				__func__);
-			goto err_ret;
+			return;
 		}
 		if (core->ssr_type != WCD_CPE_BUS_DOWN_EVENT) {
 			wcd_cpe_get_sfr_dump(core);
@@ -1079,7 +1071,7 @@ static void wcd_cpe_ssr_work(struct work_struct *work)
 		dev_err(core->dev,
 			"%s: ready to online timed out, status = %u\n",
 			__func__, core->ready_status);
-		goto err_ret;
+		return;
 	}
 
 	rc = wcd_cpe_boot_ssr(core);
@@ -1090,12 +1082,6 @@ static void wcd_cpe_ssr_work(struct work_struct *work)
 	if (CPE_ERR_IRQ_CB(core))
 		core->cpe_cdc_cb->cpe_err_irq_control(core->codec,
 					CPE_ERR_IRQ_CLEAR, NULL);
-
-err_ret:
-	/* remove after default pm qos */
-	pm_qos_update_request(&core->pm_qos_req,
-			      PM_QOS_DEFAULT_VALUE);
-	pm_qos_remove_request(&core->pm_qos_req);
 }
 
 /*
@@ -2257,7 +2243,6 @@ static int fill_cmi_header(struct cmi_hdr *hdr,
 		return -EINVAL;
 	}
 
-	hdr->hdr_info = 0;
 	CMI_HDR_SET_SESSION(hdr, session_id);
 	CMI_HDR_SET_SERVICE(hdr, service_id);
 	if (version)
@@ -2902,10 +2887,10 @@ static int wcd_cpe_send_param_snd_model(struct wcd_cpe_core *core,
 	struct cpe_lsm_session *session, struct cpe_lsm_ids *ids)
 {
 	int ret = 0;
-	struct cmi_obm_msg obm_msg = {0};
+	struct cmi_obm_msg obm_msg;
 	struct cpe_param_data *param_d;
 
-
+	memset(&obm_msg, 0, sizeof(obm_msg));
 	ret = fill_cmi_header(&obm_msg.hdr, session->id,
 			CMI_CPE_LSM_SERVICE_ID, 0, 20,
 			CPE_LSM_SESSION_CMD_SET_PARAMS_V2, true);
@@ -3167,7 +3152,7 @@ static int wcd_cpe_lsm_reg_snd_model(void *core_handle,
 				 bool detect_failure)
 {
 	int ret = 0;
-	struct cmi_obm_msg obm_msg = {0};
+	struct cmi_obm_msg obm_msg;
 	struct wcd_cpe_core *core = core_handle;
 
 	ret = wcd_cpe_is_valid_lsm_session(core, session,
@@ -3604,8 +3589,9 @@ static int wcd_cpe_lsm_eob(
 			struct cpe_lsm_session *session)
 {
 	int ret = 0;
-	struct cmi_hdr lab_eob = {0};
+	struct cmi_hdr lab_eob;
 
+	memset(&lab_eob, 0, sizeof(lab_eob));
 	if (fill_lsm_cmd_header_v0_inband(&lab_eob, session->id,
 		0, CPE_LSM_SESSION_CMD_EOB)) {
 		return -EINVAL;
@@ -4161,6 +4147,7 @@ static int wcd_cpe_send_afe_cal(void *core_handle,
 		struct cmi_hdr *hdr = &(obm_msg.hdr);
 		struct cmi_obm *pld = &(obm_msg.pld);
 
+		memset(&obm_msg, 0, sizeof(obm_msg));
 		rc = wcd_cpe_afe_shmem_alloc(core, port_d,
 					afe_cal->cal_data.size);
 		if (rc) {

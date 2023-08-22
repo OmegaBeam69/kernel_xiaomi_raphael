@@ -60,7 +60,7 @@ MODULE_PARM_DESC(swfdetect, "Enable soft fault detection");
 #define DRIVER_VERSION_MAJOR   3
 #define DRIVER_VERSION_MINOR   1
 
-#define KGSL_LOG_LEVEL_DEFAULT 3
+#define KGSL_LOG_LEVEL_DEFAULT 0
 
 static void adreno_pwr_on_work(struct work_struct *work);
 static unsigned int counter_delta(struct kgsl_device *device,
@@ -68,7 +68,7 @@ static unsigned int counter_delta(struct kgsl_device *device,
 
 static struct devfreq_msm_adreno_tz_data adreno_tz_data = {
 	.bus = {
-		.max = 350,
+		.max = 1200,
 	},
 	.device_id = KGSL_DEVICE_3D0,
 };
@@ -1011,6 +1011,11 @@ static int adreno_of_get_power(struct adreno_device *adreno_dev,
 	if (of_property_read_u32(node, "qcom,pm-qos-wakeup-latency",
 		&device->pwrctrl.pm_qos_wakeup_latency))
 		device->pwrctrl.pm_qos_wakeup_latency = 100;
+
+	/* override these */
+	device->pwrctrl.pm_qos_active_latency = 1000;
+	device->pwrctrl.pm_qos_cpu_mask_latency = 1000;
+	device->pwrctrl.pm_qos_wakeup_latency = 100;
 
 	if (of_property_read_u32(node, "qcom,idle-timeout", &timeout))
 		timeout = 58;
@@ -3197,10 +3202,8 @@ static void adreno_read(struct kgsl_device *device, void __iomem *base,
 
 	reg = (base + (offsetwords << 2));
 
-#if 0
 	if (!in_interrupt())
 		kgsl_pre_hwaccess(device);
-#endif
 
 	*value = __raw_readl(reg);
 	/*
@@ -3247,10 +3250,8 @@ static void adreno_regwrite(struct kgsl_device *device,
 			offsetwords, device->reg_len >> 2))
 		return;
 
-#if 0
 	if (!in_interrupt())
 		kgsl_pre_hwaccess(device);
-#endif
 
 	trace_kgsl_regwrite(device, offsetwords, value);
 

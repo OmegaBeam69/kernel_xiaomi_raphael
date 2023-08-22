@@ -50,8 +50,8 @@ int sysctl_tcp_retrans_collapse __read_mostly = 1;
  */
 int sysctl_tcp_workaround_signed_windows __read_mostly = 0;
 
-/* Default TSQ limit of four TSO segments */
-int sysctl_tcp_limit_output_bytes __read_mostly = 262144;
+/* Default TSQ limit of 16 TSO segments */
+int sysctl_tcp_limit_output_bytes __read_mostly = 16 * 65536;
 
 /* This limits the percentage of the congestion window which we
  * will allow a single TSO frame to consume.  Building TSO frames
@@ -61,21 +61,6 @@ int sysctl_tcp_tso_win_divisor __read_mostly = 3;
 
 /* By default, RFC2861 behavior.  */
 int sysctl_tcp_slow_start_after_idle __read_mostly = 1;
-
-/* Refresh clocks of a TCP socket,
- * ensuring monotically increasing values.
- */
-void tcp_mstamp_refresh(struct tcp_sock *tp)
-{
-	u64 val = tcp_clock_ns();
-
-	if (val > tp->tcp_clock_cache)
-		tp->tcp_clock_cache = val;
-
-	val = div_u64(val, NSEC_PER_USEC);
-	if (val > tp->tcp_mstamp)
-		tp->tcp_mstamp = val;
-}
 
 static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			   int push_one, gfp_t gfp);
@@ -388,8 +373,7 @@ static void tcp_ecn_send(struct sock *sk, struct sk_buff *skb,
 				th->cwr = 1;
 				skb_shinfo(skb)->gso_type |= SKB_GSO_TCP_ECN;
 			}
-		} else if (!(tp->ecn_flags & TCP_ECN_ECT_PERMANENT) &&
-			!tcp_ca_needs_ecn(sk)) {
+		} else if (!tcp_ca_needs_ecn(sk)) {
 			/* ACK or retransmitted segment: clear ECT|CE */
 			INET_ECN_dontxmit(sk);
 		}
@@ -956,12 +940,12 @@ enum hrtimer_restart tcp_pace_kick(struct hrtimer *timer)
 static void tcp_internal_pacing(struct sock *sk, const struct sk_buff *skb)
 {
 	u64 len_ns;
-	u32 rate;
+	unsigned long rate;
 
 	if (!tcp_needs_internal_pacing(sk))
 		return;
 	rate = sk->sk_pacing_rate;
-	if (!rate || rate == ~0U)
+	if (!rate || rate == ~0UL)
 		return;
 
 	len_ns = (u64)skb->len * NSEC_PER_SEC;
@@ -1009,9 +993,6 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 			return -ENOBUFS;
 	}
 	skb->skb_mstamp = tp->tcp_mstamp;
-
-	/* TODO: might take care of jitter here */
-	tp->tcp_wstamp_ns = max(tp->tcp_wstamp_ns, tp->tcp_clock_cache);
 
 	inet = inet_sk(sk);
 	tcb = TCP_SKB_CB(skb);
@@ -1257,7 +1238,7 @@ int tcp_fragment(struct sock *sk, struct sk_buff *skb, u32 len,
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct sk_buff *buff;
-	int nsize, old_factor, inflight_prev;
+	int nsize, old_factor;
 	long limit;
 	int nlen;
 	u8 flags;
@@ -1308,21 +1289,9 @@ int tcp_fragment(struct sock *sk, struct sk_buff *skb, u32 len,
 	TCP_SKB_CB(buff)->sacked = TCP_SKB_CB(skb)->sacked;
 	tcp_skb_fragment_eor(skb, buff);
 
-	if (!skb_shinfo(skb)->nr_frags && skb->ip_summed != CHECKSUM_PARTIAL) {
-		/* Copy and checksum data tail into the new buffer. */
-		buff->csum = csum_partial_copy_nocheck(skb->data + len,
-						       skb_put(buff, nsize),
-						       nsize, 0);
+	skb_split(skb, buff, len);
 
-		skb_trim(skb, len);
-
-		skb->csum = csum_block_sub(skb->csum, buff->csum, len);
-	} else {
-		skb->ip_summed = CHECKSUM_PARTIAL;
-		skb_split(skb, buff, len);
-	}
-
-	buff->ip_summed = skb->ip_summed;
+	buff->ip_summed = CHECKSUM_PARTIAL;
 
 	buff->tstamp = skb->tstamp;
 	tcp_fragment_tstamp(skb, buff);
@@ -1345,15 +1314,6 @@ int tcp_fragment(struct sock *sk, struct sk_buff *skb, u32 len,
 
 		if (diff)
 			tcp_adjust_pcount(sk, skb, diff);
-
-		/* Set buff tx.in_flight as if buff were sent by itself. */
-		inflight_prev = TCP_SKB_CB(skb)->tx.in_flight - old_factor;
-		if (WARN_ONCE(inflight_prev < 0,
-			      "inconsistent: tx.in_flight: %u old_factor: %d",
-			      TCP_SKB_CB(skb)->tx.in_flight, old_factor))
-			inflight_prev = 0;
-		TCP_SKB_CB(buff)->tx.in_flight = inflight_prev +
-						 tcp_skb_pcount(buff);
 	}
 
 	/* Link BUFF into the send queue. */
@@ -1706,8 +1666,9 @@ static u32 tcp_tso_autosize(const struct sock *sk, unsigned int mss_now,
 {
 	u32 bytes, segs;
 
-	bytes = min(sk->sk_pacing_rate >> sk->sk_pacing_shift,
-		    sk->sk_gso_max_size - 1 - MAX_TCP_HEADER);
+	bytes = min_t(unsigned long,
+		      sk->sk_pacing_rate >> READ_ONCE(sk->sk_pacing_shift),
+		      sk->sk_gso_max_size - 1 - MAX_TCP_HEADER);
 
 	/* Goal is to send at least one packet per ms,
 	 * not one big TSO packet every 100 ms.
@@ -1725,12 +1686,13 @@ static u32 tcp_tso_autosize(const struct sock *sk, unsigned int mss_now,
 static u32 tcp_tso_segs(struct sock *sk, unsigned int mss_now)
 {
 	const struct tcp_congestion_ops *ca_ops = inet_csk(sk)->icsk_ca_ops;
-	u32 tso_segs;
+	u32 min_tso, tso_segs;
 
-	tso_segs = ca_ops->tso_segs ?
-		ca_ops->tso_segs(sk, mss_now) :
-		tcp_tso_autosize(sk, mss_now,
-				 sysctl_tcp_min_tso_segs);
+	min_tso = ca_ops->min_tso_segs ?
+			ca_ops->min_tso_segs(sk) :
+			sysctl_tcp_min_tso_segs;
+
+	tso_segs = tcp_tso_autosize(sk, mss_now, min_tso);
 	return min_t(u32, tso_segs, sk->sk_gso_max_segs);
 }
 
@@ -1887,7 +1849,7 @@ static int tso_fragment(struct sock *sk, struct sk_buff *skb, unsigned int len,
 
 	tcp_skb_fragment_eor(skb, buff);
 
-	buff->ip_summed = skb->ip_summed = CHECKSUM_PARTIAL;
+	buff->ip_summed = CHECKSUM_PARTIAL;
 	skb_split(skb, buff, len);
 	tcp_fragment_tstamp(skb, buff);
 
@@ -2133,7 +2095,7 @@ static int tcp_mtu_probe(struct sock *sk)
 	TCP_SKB_CB(nskb)->tcp_flags = TCPHDR_ACK;
 	TCP_SKB_CB(nskb)->sacked = 0;
 	nskb->csum = 0;
-	nskb->ip_summed = skb->ip_summed;
+	nskb->ip_summed = CHECKSUM_PARTIAL;
 
 	tcp_insert_write_queue_before(nskb, skb, sk);
 	tcp_highest_sack_replace(sk, skb, nskb);
@@ -2141,14 +2103,7 @@ static int tcp_mtu_probe(struct sock *sk)
 	len = 0;
 	tcp_for_write_queue_from_safe(skb, next, sk) {
 		copy = min_t(int, skb->len, probe_size - len);
-		if (nskb->ip_summed) {
-			skb_copy_bits(skb, 0, skb_put(nskb, copy), copy);
-		} else {
-			__wsum csum = skb_copy_and_csum_bits(skb, 0,
-							     skb_put(nskb, copy),
-							     copy, 0);
-			nskb->csum = csum_block_add(nskb->csum, csum, len);
-		}
+		skb_copy_bits(skb, 0, skb_put(nskb, copy), copy);
 
 		if (skb->len <= copy) {
 			/* We've eaten all the data from this skb.
@@ -2166,9 +2121,6 @@ static int tcp_mtu_probe(struct sock *sk)
 						   ~(TCPHDR_FIN|TCPHDR_PSH);
 			if (!skb_shinfo(skb)->nr_frags) {
 				skb_pull(skb, copy);
-				if (skb->ip_summed != CHECKSUM_PARTIAL)
-					skb->csum = csum_partial(skb->data,
-								 skb->len, 0);
 			} else {
 				__pskb_trim_head(skb, copy);
 				tcp_set_skb_tso_segs(skb, mss_now);
@@ -2222,10 +2174,14 @@ static bool tcp_pacing_check(const struct sock *sk)
 static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 				  unsigned int factor)
 {
-	unsigned int limit;
+	unsigned long limit;
 
-	limit = max(2 * skb->truesize, sk->sk_pacing_rate >> sk->sk_pacing_shift);
-	limit = min_t(u32, limit, sysctl_tcp_limit_output_bytes);
+	limit = max_t(unsigned long,
+		      2 * skb->truesize,
+		      sk->sk_pacing_rate >> READ_ONCE(sk->sk_pacing_shift));
+	if (sk->sk_pacing_status == SK_PACING_NONE)
+		limit = min_t(unsigned long, limit,
+			      sysctl_tcp_limit_output_bytes);
 	limit <<= factor;
 
 	if (refcount_read(&sk->sk_wmem_alloc) > limit) {
@@ -2343,7 +2299,6 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		if (unlikely(tp->repair) && tp->repair_queue == TCP_SEND_QUEUE) {
 			/* "skb_mstamp" is used as a start point for the retransmit timer */
 			skb->skb_mstamp = tp->tcp_mstamp;
-			tcp_set_tx_in_flight(sk, skb);
 			goto repair; /* Skip network transmission */
 		}
 
@@ -2765,12 +2720,6 @@ static bool tcp_collapse_retrans(struct sock *sk, struct sk_buff *skb)
 	tcp_highest_sack_replace(sk, next_skb, skb);
 
 	tcp_unlink_write_queue(next_skb, sk);
-
-	if (next_skb->ip_summed == CHECKSUM_PARTIAL)
-		skb->ip_summed = CHECKSUM_PARTIAL;
-
-	if (skb->ip_summed != CHECKSUM_PARTIAL)
-		skb->csum = csum_block_add(skb->csum, next_skb->csum, skb_size);
 
 	/* Update sequence range on original skb. */
 	TCP_SKB_CB(skb)->end_seq = TCP_SKB_CB(next_skb)->end_seq;

@@ -6714,7 +6714,7 @@ static ssize_t ipa3_write(struct file *file, const char __user *buf,
 
 	int i = 0;
 
-	if (count >= sizeof(dbg_buff))
+	if (sizeof(dbg_buff) < count + 1)
 		return -EFAULT;
 
 	missing = copy_from_user(dbg_buff, buf, min(sizeof(dbg_buff), count));
@@ -7430,6 +7430,7 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 #ifdef CONFIG_DEBUGFS
 	ipa3_debugfs_pre_init();
 #endif
+
 	/* Create a wakeup source. */
 	wakeup_source_init(&ipa3_ctx->w_lock, "IPA_WS");
 	spin_lock_init(&ipa3_ctx->wakelock_ref_cnt.spinlock);
@@ -7911,9 +7912,10 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 		ipa_drv_res->ipa_config_is_sa
 		? "True" : "False");
 
-	ipa_drv_res->ipa_wan_skb_page =
-			of_property_read_bool(pdev->dev.of_node,
-			"qcom,wan-use-skb-page");
+	// ipa_drv_res->ipa_wan_skb_page =
+	// 		of_property_read_bool(pdev->dev.of_node,
+	// 		"qcom,wan-use-skb-page");
+	ipa_drv_res->ipa_wan_skb_page = false;
 	IPADBG(": Use skb page = %s\n",
 			ipa_drv_res->ipa_wan_skb_page
 			? "True" : "False");

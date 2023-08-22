@@ -10,7 +10,6 @@ obj-$(CONFIG_BLOCK) := bio.o elevator.o blk-core.o blk-tag.o blk-sysfs.o \
 			blk-mq-sysfs.o blk-mq-cpumap.o blk-mq-sched.o ioctl.o \
 			genhd.o partition-generic.o ioprio.o \
 			badblocks.o partitions/
-
 ccflags-y += -mllvm -inline-threshold=15000
 ccflags-y += -mllvm -inlinehint-threshold=10000
 

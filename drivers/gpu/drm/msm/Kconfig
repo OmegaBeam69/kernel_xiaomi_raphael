@@ -185,7 +185,7 @@ config EXPOSURE_ADJUSTMENT
 	help
           The EXPOSURE ADJUSTMENT provides exposure adjustment function without change
           panel hardware brightness to avoid PWM flicker on OLED devices.
-
+		  
 config DRM_MSM_KCAL_CTRL
 	bool "Enable kernel-level color calibration control"
 	depends on DRM_MSM
@@ -214,3 +214,15 @@ config DRM_SDE_RSC
 	  avoids the display core power collapse. A client can also register
 	  for display core power collapse events on rsc.
 
+config FENCE_DEBUG
+	bool "Print fence name to userspace"
+	depends on DRM_MSM
+	default n
+
+config DSI_FEATURES
+	bool "Force enable ULPS and PHY poweroff"
+	depends on DRM_MSM
+	default n
+	help
+	  If features can't be enabled in the display drivers in arch/
+	  use this switch to force the use of ULPS and PHY poweroff.

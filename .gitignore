@@ -76,6 +76,7 @@ modules.builtin
 !.gitignore
 !.mailmap
 !.cocciconfig
+!.clang-format
 
 #
 # Generated include files
@@ -126,5 +127,13 @@ all.config
 # fetched Android config fragments
 kernel/configs/android-*.cfg
 
-# Object directory
-out/
+# Personal
+/build/
+/out/
+/net/wireguard/
+c.sh
+Buildlog-CLANG.txt
+build.sh
+qcacld-3.0.sh
+Zip-out/*.zip
+Zip-out/anykernel/dtbo.img

@@ -1554,7 +1554,11 @@ retry:
 	trace_block_sleeprq(q, bio, op);
 
 	spin_unlock_irq(q->queue_lock);
-	io_schedule();
+	/*
+	 * FIXME: this should be io_schedule().  The timeout is there as a
+	 * workaround for some io timeout problems.
+	 */
+	io_schedule_timeout(5*HZ);
 
 	/*
 	 * After sleeping, we become a "batching" process and will be able
@@ -2673,13 +2677,13 @@ EXPORT_SYMBOL_GPL(blk_rq_err_bytes);
 void blk_account_io_completion(struct request *req, unsigned int bytes)
 {
 	if (blk_do_io_stat(req)) {
-		const int sgrp = op_stat_group(req_op(req));
+		const int rw = rq_data_dir(req);
 		struct hd_struct *part;
 		int cpu;
 
 		cpu = part_stat_lock();
 		part = req->part;
-		part_stat_add(cpu, part, sectors[sgrp], bytes >> 9);
+		part_stat_add(cpu, part, sectors[rw], bytes >> 9);
 		part_stat_unlock();
 	}
 }
@@ -2693,17 +2697,17 @@ void blk_account_io_done(struct request *req)
 	 */
 	if (blk_do_io_stat(req) && !(req->rq_flags & RQF_FLUSH_SEQ)) {
 		unsigned long duration = jiffies - req->start_time;
-		const int sgrp = op_stat_group(req_op(req));
+		const int rw = rq_data_dir(req);
 		struct hd_struct *part;
 		int cpu;
 
 		cpu = part_stat_lock();
 		part = req->part;
 
-		part_stat_inc(cpu, part, ios[sgrp]);
-		part_stat_add(cpu, part, ticks[sgrp], duration);
+		part_stat_inc(cpu, part, ios[rw]);
+		part_stat_add(cpu, part, ticks[rw], duration);
 		part_round_stats(req->q, cpu, part);
-		part_dec_in_flight(req->q, part, rq_data_dir(req));
+		part_dec_in_flight(req->q, part, rw);
 
 		hd_struct_put(part);
 		part_stat_unlock();
@@ -3845,8 +3849,7 @@ int __init blk_dev_init(void)
 
 	/* used for unplugging and affects IO latency/throughput - HIGHPRI */
 	kblockd_workqueue = alloc_workqueue("kblockd",
-					    WQ_MEM_RECLAIM | WQ_HIGHPRI |
-					    WQ_POWER_EFFICIENT, 0);
+					    WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
 	if (!kblockd_workqueue)
 		panic("Failed to create kblockd\n");
 

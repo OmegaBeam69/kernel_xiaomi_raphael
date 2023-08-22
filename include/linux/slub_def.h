@@ -101,7 +101,6 @@ struct kmem_cache {
 	void (*ctor)(void *);
 	int inuse;		/* Offset to metadata */
 	int align;		/* Alignment */
-	int reserved;		/* Reserved bytes at the end of slabs */
 	int red_left_pad;	/* Left redzone padding size */
 	const char *name;	/* Name (only for display!) */
 	struct list_head list;	/* List of slab caches */
@@ -125,7 +124,7 @@ struct kmem_cache {
 	/*
 	 * Defragmentation by allocating from a remote node.
 	 */
-	int remote_node_defrag_ratio;
+	unsigned int remote_node_defrag_ratio;
 #endif
 
 #ifdef CONFIG_SLAB_FREELIST_RANDOM

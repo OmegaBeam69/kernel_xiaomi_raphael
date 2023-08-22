@@ -443,6 +443,7 @@ struct request_queue;
 extern int bio_phys_segments(struct request_queue *, struct bio *);
 
 extern int submit_bio_wait(struct bio *bio);
+extern void submit_bio_nowait(struct bio *bio);
 extern void bio_advance(struct bio *, unsigned);
 
 extern void bio_init(struct bio *bio, struct bio_vec *table,
@@ -470,9 +471,9 @@ extern struct bio *bio_copy_kern(struct request_queue *, void *, unsigned int,
 extern void bio_set_pages_dirty(struct bio *bio);
 extern void bio_check_pages_dirty(struct bio *bio);
 
-void generic_start_io_acct(struct request_queue *q, int op,
+void generic_start_io_acct(struct request_queue *q, int rw,
 				unsigned long sectors, struct hd_struct *part);
-void generic_end_io_acct(struct request_queue *q, int op,
+void generic_end_io_acct(struct request_queue *q, int rw,
 				struct hd_struct *part,
 				unsigned long start_time);
 

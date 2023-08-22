@@ -10,7 +10,6 @@
 #include <linux/binfmts.h>
 #include <linux/sched/idle.h>
 
-#ifndef CONFIG_MINIMAL_TRACING_FOR_IORAP
 /*
  * Tracepoint for calling kthread_stop, performed to end a kthread:
  */
@@ -99,11 +98,6 @@ TRACE_EVENT(sched_enq_deq_task,
 			, __entry->demand, __entry->pred_demand
 			)
 );
-#else
-#define trace_sched_kthread_stop(...) {}
-#define trace_sched_kthread_stop_ret(...) {}
-#define trace_sched_enq_deq_task(...) {}
-#endif /* CONFIG_MINIMAL_TRACING_FOR_IORAP */
 
 /*
  * Tracepoint for waking up a task:
@@ -237,7 +231,6 @@ TRACE_EVENT(sched_switch,
 		__entry->next_comm, __entry->next_pid, __entry->next_prio)
 );
 
-#ifndef CONFIG_MINIMAL_TRACING_FOR_IORAP
 /*
  * Tracepoint for a task being migrated:
  */
@@ -267,9 +260,6 @@ TRACE_EVENT(sched_migrate_task,
 		  __entry->comm, __entry->pid, __entry->prio,
 		  __entry->orig_cpu, __entry->dest_cpu)
 );
-#else
-#define trace_sched_migrate_task(...) {}
-#endif /* CONFIG_MINIMAL_TRACING_FOR_IORAP */
 
 /*
  * Tracepoint for load balancing:
@@ -278,7 +268,6 @@ TRACE_EVENT(sched_migrate_task,
 #if NR_CPUS > 32
 #error "Unsupported NR_CPUS for lb tracepoint."
 #endif
-#ifndef CONFIG_MINIMAL_TRACING_FOR_IORAP
 TRACE_EVENT(sched_load_balance,
 
 	TP_PROTO(int cpu, enum cpu_idle_type idle, int balance,
@@ -429,12 +418,6 @@ TRACE_EVENT(sched_load_balance_stats,
 	TP_printk("busiest_group=%#lx busiest_type=%d busiest_avg_load=%ld busiest_lpt=%ld local_group=%#lx local_type=%d local_avg_load=%ld local_lpt=%ld domain_avg_load=%ld imbalance=%ld",
 		__entry->busiest, __entry->bgp_type, __entry->bavg_load, __entry->blpt, __entry->local, __entry->lgp_type, __entry->lavg_load, __entry->llpt, __entry->sds_avg, __entry->imbalance)
 );
-#else
-#define trace_sched_load_balance(...) {}
-#define trace_sched_load_balance_nohz_kick(...) {}
-#define trace_sched_load_balance_sg_stats(...) {}
-#define trace_sched_load_balance_stats(...) {}
-#endif /* CONFIG_MINIMAL_TRACING_FOR_IORAP */
 #endif
 
 DECLARE_EVENT_CLASS(sched_process_template,
@@ -466,7 +449,7 @@ DEFINE_EVENT(sched_process_template, sched_process_free,
 	     TP_PROTO(struct task_struct *p),
 	     TP_ARGS(p));
 
-#ifndef CONFIG_MINIMAL_TRACING_FOR_IORAP
+
 /*
  * Tracepoint for a task exiting:
  */
@@ -505,11 +488,6 @@ TRACE_EVENT(sched_process_wait,
 	TP_printk("comm=%s pid=%d prio=%d",
 		  __entry->comm, __entry->pid, __entry->prio)
 );
-#else
-#define trace_sched_process_exit(...) {}
-#define trace_sched_wait_task(...) {}
-#define trace_sched_process_wait(...) {}
-#endif /* CONFIG_MINIMAL_TRACING_FOR_IORAP */
 
 /*
  * Tracepoint for do_fork:
@@ -539,7 +517,6 @@ TRACE_EVENT(sched_process_fork,
 		__entry->child_comm, __entry->child_pid)
 );
 
-#ifndef CONFIG_MINIMAL_TRACING_FOR_IORAP
 /*
  * Tracepoint for exec:
  */
@@ -714,26 +691,8 @@ TRACE_EVENT(sched_pi_setprio,
 			__entry->comm, __entry->pid,
 			__entry->oldprio, __entry->newprio)
 );
-#else
-#define trace_sched_process_exec(...) {}
-#define trace_sched_stat_wait(...) {}
-#define trace_sched_stat_wait_enabled(...) false
-#define trace_sched_stat_sleep(...) {}
-#define trace_sched_stat_sleep_enabled(...) false
-#define trace_sched_stat_iowait(...) {}
-#define trace_sched_stat_iowait_enabled(...) false
-#define trace_sched_stat_blocked(...) {}
-#define trace_sched_stat_blocked_enabled(...) false
-#define trace_sched_blocked_reason(...) {}
-#define trace_sched_stat_runtime(...) {}
-#define trace_sched_stat_runtime_enabled(...) false
-#define trace_sched_set_preferred_cluster_enabled(...) false
-#define trace_core_ctl_notif_data(...) {}
-#define trace_sched_pi_setprio(...) {}
-#endif /* CONFIG_MINIMAL_TRACING_FOR_IORAP */
 
 #ifdef CONFIG_DETECT_HUNG_TASK
-#ifndef CONFIG_MINIMAL_TRACING_FOR_IORAP
 TRACE_EVENT(sched_process_hang,
 	TP_PROTO(struct task_struct *tsk),
 	TP_ARGS(tsk),
@@ -750,12 +709,8 @@ TRACE_EVENT(sched_process_hang,
 
 	TP_printk("comm=%s pid=%d", __entry->comm, __entry->pid)
 );
-#else
-#define trace_sched_process_hang(...) {}
-#endif /* CONFIG_MINIMAL_TRACING_FOR_IORAP */
 #endif /* CONFIG_DETECT_HUNG_TASK */
 
-#ifndef CONFIG_MINIMAL_TRACING_FOR_IORAP
 DECLARE_EVENT_CLASS(sched_move_task_template,
 
 	TP_PROTO(struct task_struct *tsk, int src_cpu, int dst_cpu),
@@ -863,16 +818,8 @@ TRACE_EVENT(sched_wake_idle_without_ipi,
 
 	TP_printk("cpu=%d", __entry->cpu)
 );
-#else
-#define trace_sched_move_numa(...) {}
-#define trace_sched_stick_numa(...) {}
-#define trace_sched_swap_numa(...) {}
-#define trace_sched_wake_idle_without_ipi(...) {}
-#endif /* CONFIG_MINIMAL_TRACING_FOR_IORAP */
 
 #ifdef CONFIG_SMP
-
-#ifndef CONFIG_MINIMAL_TRACING_FOR_IORAP
 #ifdef CREATE_TRACE_POINTS
 static inline
 int __trace_sched_cpu(struct cfs_rq *cfs_rq, struct sched_entity *se)
@@ -1045,17 +992,11 @@ TRACE_EVENT(sched_load_se,
 		  __entry->pid, __entry->load, __entry->util,
 		  __entry->util_pelt, __entry->util_walt)
 );
-#else
-#define trace_sched_load_cfs_rq(...) {}
-#define trace_sched_load_rt_rq(...) {}
-#define trace_sched_load_se(...) {}
-#endif /* CONFIG_MINIMAL_TRACING_FOR_IORAP */
 
 /*
  * Tracepoint for task_group load tracking:
  */
 #ifdef CONFIG_FAIR_GROUP_SCHED
-#ifndef CONFIG_MINIMAL_TRACING_FOR_IORAP
 TRACE_EVENT(sched_load_tg,
 
 	TP_PROTO(struct cfs_rq *cfs_rq),
@@ -1079,12 +1020,8 @@ TRACE_EVENT(sched_load_tg,
 	TP_printk("cpu=%d path=%s load=%ld", __entry->cpu, __get_str(path),
 		  __entry->load)
 );
-#else
-#define trace_sched_load_tg(...) {}
-#endif /* CONFIG_MINIMAL_TRACING_FOR_IORAP */
 #endif /* CONFIG_FAIR_GROUP_SCHED */
 
-#ifndef CONFIG_MINIMAL_TRACING_FOR_IORAP
 /*
  * Tracepoint for accounting CPU  boosted utilization
  */
@@ -1200,6 +1137,33 @@ TRACE_EVENT(core_ctl_update_nr_need,
 	TP_printk("cpu=%d nr_need=%d prev_misfit_need=%d nrrun=%d max_nr=%d nr_prev_assist=%d",
 		__entry->cpu, __entry->nr_need, __entry->prev_misfit_need,
 		__entry->nrrun, __entry->max_nr, __entry->nr_prev_assist)
+);
+
+TRACE_EVENT(core_ctl_notif_data,
+
+	TP_PROTO(u32 nr_big, u32 ta_load, u32 *ta_util, u32 *cur_cap),
+
+	TP_ARGS(nr_big, ta_load, ta_util, cur_cap),
+
+	TP_STRUCT__entry(
+		__field(u32, nr_big)
+		__field(u32, ta_load)
+		__array(u32, ta_util, MAX_CLUSTERS)
+		__array(u32, cur_cap, MAX_CLUSTERS)
+	),
+
+	TP_fast_assign(
+		__entry->nr_big = nr_big;
+		__entry->ta_load = ta_load;
+		memcpy(__entry->ta_util, ta_util, MAX_CLUSTERS * sizeof(u32));
+		memcpy(__entry->cur_cap, cur_cap, MAX_CLUSTERS * sizeof(u32));
+	),
+
+	TP_printk("nr_big=%u ta_load=%u ta_util=(%u %u %u) cur_cap=(%u %u %u)",
+		  __entry->nr_big, __entry->ta_load,
+		  __entry->ta_util[0], __entry->ta_util[1],
+		  __entry->ta_util[2], __entry->cur_cap[0],
+		  __entry->cur_cap[1], __entry->cur_cap[2])
 );
 
 /*
@@ -1436,28 +1400,6 @@ TRACE_EVENT(sched_util_est_cpu,
 		  __entry->util_est_enqueued)
 );
 
-TRACE_EVENT(sched_capacity_update,
-
-	TP_PROTO(int cpu),
-
-	TP_ARGS(cpu),
-
-	TP_STRUCT__entry(
-		__field(unsigned int, cpu			)
-		__field(unsigned int, capacity			)
-		__field(unsigned int, capacity_orig		)
-	),
-
-	TP_fast_assign(
-		__entry->cpu			= cpu;
-		__entry->capacity		= capacity_of(cpu);
-		__entry->capacity_orig		= capacity_orig_of(cpu);
-	),
-
-	TP_printk("cpu=%d capacity=%u capacity_orig=%u",
-		__entry->cpu, __entry->capacity, __entry->capacity_orig)
-);
-
 TRACE_EVENT(sched_cpu_util,
 
 	TP_PROTO(int cpu),
@@ -1593,15 +1535,16 @@ TRACE_EVENT(sched_task_util,
  */
 TRACE_EVENT(sched_get_nr_running_avg,
 
-	TP_PROTO(int cpu, int nr, int nr_misfit, int nr_max),
+	TP_PROTO(int cpu, int nr, int nr_misfit, int nr_max, int nr_scaled),
 
-	TP_ARGS(cpu, nr, nr_misfit, nr_max),
+	TP_ARGS(cpu, nr, nr_misfit, nr_max, nr_scaled),
 
 	TP_STRUCT__entry(
-		__field( int, cpu)
-		__field( int, nr)
-		__field( int, nr_misfit)
-		__field( int, nr_max)
+		__field(int, cpu)
+		__field(int, nr)
+		__field(int, nr_misfit)
+		__field(int, nr_max)
+		__field( int, nr_scaled)
 	),
 
 	TP_fast_assign(
@@ -1609,10 +1552,12 @@ TRACE_EVENT(sched_get_nr_running_avg,
 		__entry->nr = nr;
 		__entry->nr_misfit = nr_misfit;
 		__entry->nr_max = nr_max;
+		__entry->nr_scaled = nr_scaled;
 	),
 
-	TP_printk("cpu=%d nr=%d nr_misfit=%d nr_max=%d",
-		__entry->cpu, __entry->nr, __entry->nr_misfit, __entry->nr_max)
+	TP_printk("cpu=%d nr=%d nr_misfit=%d nr_max=%d nr_scaled=%d",
+		__entry->cpu, __entry->nr, __entry->nr_misfit, __entry->nr_max,
+		__entry->nr_scaled)
 );
 
 /*
@@ -1653,43 +1598,8 @@ TRACE_EVENT(sched_isolate,
 
 #include "walt.h"
 
-#else
-#define trace_sched_boost_cpu(...) {}
-#define trace_core_ctl_eval_need(...) {}
-#define trace_core_ctl_set_busy(...) {}
-#define trace_core_ctl_set_boost(...) {}
-#define trace_core_ctl_update_nr_need(...) {}
-#define trace_sched_tune_tasks_update(...) {}
-#define trace_sched_tune_boostgroup_update(...) {}
-#define trace_sched_boost_task(...) {}
-#define trace_sched_overutilized(...) {}
-#define trace_sched_find_best_target(...) {}
-#define trace_sched_util_est_task(...) {}
-#define trace_sched_util_est_cpu(...) {}
-#define trace_sched_capacity_update(...) {}
-#define trace_sched_cpu_util(...) {}
-#define trace_sched_energy_diff(...) {}
-#define trace_sched_task_util(...) {}
-#define trace_sched_task_util_enabled(...) false
-#define trace_sched_get_nr_running_avg(...) {}
-#define trace_sched_isolate(...) {}
-#define trace_sched_isolate_enabled(...) false
-#define trace_sched_load_balance_skip_tasks(...) {}
-#define trace_sched_load_to_gov {}
-#define trace_sched_update_pred_demand {}
-#define trace_sched_update_history {}
-#define trace_sched_get_task_cpu_cycles {}
-#define trace_sched_update_task_ravg {}
-#define trace_sched_update_task_ravg_mini {}
-#define trace_sched_set_preferred_cluster {}
-#define trace_sched_migration_update_sum {}
-#define trace_sched_set_boost {}
-
-#endif /* CONFIG_MINIMAL_TRACING_FOR_IORAP */
-
 #endif /* CONFIG_SMP */
 
-#ifndef CONFIG_MINIMAL_TRACING_FOR_IORAP
 TRACE_EVENT(sched_preempt_disable,
 
 	TP_PROTO(u64 delta, bool irqs_disabled,
@@ -1721,9 +1631,6 @@ TRACE_EVENT(sched_preempt_disable,
 				__entry->caddr0, __entry->caddr1,
 				__entry->caddr2, __entry->caddr3)
 );
-#else
-#define trace_sched_preempt_disable(...) {}
-#endif /* CONFIG_MINIMAL_TRACING_FOR_IORAP */
 
 #endif /* _TRACE_SCHED_H */
 

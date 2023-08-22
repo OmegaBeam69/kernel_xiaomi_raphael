@@ -49,7 +49,6 @@ struct fq_codel_flow {
 	struct sk_buff	  *tail;
 	struct list_head  flowchain;
 	int		  deficit;
-	u32		  dropped; /* number of drops (or ECN marks) on this flow */
 	struct codel_vars cvars;
 }; /* please try to keep this structure <= 64 bytes */
 
@@ -105,6 +104,7 @@ static unsigned int fq_codel_classify(struct sk_buff *skb, struct Qdisc *sch,
 		case TC_ACT_QUEUED:
 		case TC_ACT_TRAP:
 			*qerr = NET_XMIT_SUCCESS | __NET_XMIT_STOLEN;
+			/* fall through */
 		case TC_ACT_SHOT:
 			return 0;
 		}
@@ -176,7 +176,8 @@ static unsigned int fq_codel_drop(struct Qdisc *sch, unsigned int max_packets,
 		__qdisc_drop(skb, to_free);
 	} while (++i < max_packets && len < threshold);
 
-	flow->dropped += i;
+	/* Tell codel to increase its signal strength also */
+	flow->cvars.count += i;
 	q->backlogs[idx] -= len;
 	q->memory_usage -= mem;
 	sch->qstats.drops += i;
@@ -214,7 +215,6 @@ static int fq_codel_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		list_add_tail(&flow->flowchain, &q->new_flows);
 		q->new_flow_count++;
 		flow->deficit = q->quantum;
-		flow->dropped = 0;
 	}
 	get_codel_cb(skb)->mem_usage = skb->truesize;
 	q->memory_usage += get_codel_cb(skb)->mem_usage;
@@ -289,7 +289,6 @@ static struct sk_buff *fq_codel_dequeue(struct Qdisc *sch)
 	struct sk_buff *skb;
 	struct fq_codel_flow *flow;
 	struct list_head *head;
-	u32 prev_drop_count, prev_ecn_mark;
 
 begin:
 	head = &q->new_flows;
@@ -306,30 +305,9 @@ begin:
 		goto begin;
 	}
 
-	prev_drop_count = q->cstats.drop_count;
-	prev_ecn_mark = q->cstats.ecn_mark;
-
 	skb = codel_dequeue(sch, &sch->qstats.backlog, &q->cparams,
 			    &flow->cvars, &q->cstats, qdisc_pkt_len,
 			    codel_get_enqueue_time, drop_func, dequeue_func);
-
-	flow->dropped += q->cstats.drop_count - prev_drop_count;
-	flow->dropped += q->cstats.ecn_mark - prev_ecn_mark;
-
-	/* If our qlen is 0 qdisc_tree_reduce_backlog() will deactivate
-	 * parent class, dequeue in parent qdisc will do the same if we
-	 * return skb. Temporary increment qlen if we have skb.
-	 */
-	if (q->cstats.drop_count) {
-		if (skb)
-			sch->q.qlen++;
-		qdisc_tree_reduce_backlog(sch, q->cstats.drop_count,
-					  q->cstats.drop_len);
-		if (skb)
-			sch->q.qlen--;
-		q->cstats.drop_count = 0;
-		q->cstats.drop_len = 0;
-	}
 
 	if (!skb) {
 		/* force a pass through old_flows to prevent starvation */
@@ -341,6 +319,15 @@ begin:
 	}
 	qdisc_bstats_update(sch, skb);
 	flow->deficit -= qdisc_pkt_len(skb);
+	/* We cant call qdisc_tree_reduce_backlog() if our qlen is 0,
+	 * or HTB crashes. Defer it for next round.
+	 */
+	if (q->cstats.drop_count && sch->q.qlen) {
+		qdisc_tree_reduce_backlog(sch, q->cstats.drop_count,
+					  q->cstats.drop_len);
+		q->cstats.drop_count = 0;
+		q->cstats.drop_len = 0;
+	}
 	return skb;
 }
 
@@ -487,16 +474,17 @@ static int fq_codel_init(struct Qdisc *sch, struct nlattr *opt)
 			return err;
 	}
 
-	err = tcf_block_get(&q->block, &q->filter_list);
+	err = tcf_block_get(&q->block, &q->filter_list, sch);
 	if (err)
 		return err;
 
 	if (!q->flows) {
-		q->flows = kvzalloc(q->flows_cnt *
-					   sizeof(struct fq_codel_flow), GFP_KERNEL);
+		q->flows = kvcalloc(q->flows_cnt,
+				    sizeof(struct fq_codel_flow),
+				    GFP_KERNEL);
 		if (!q->flows)
 			return -ENOMEM;
-		q->backlogs = kvzalloc(q->flows_cnt * sizeof(u32), GFP_KERNEL);
+		q->backlogs = kvcalloc(q->flows_cnt, sizeof(u32), GFP_KERNEL);
 		if (!q->backlogs)
 			return -ENOMEM;
 		for (i = 0; i < q->flows_cnt; i++) {
@@ -591,8 +579,6 @@ static unsigned long fq_codel_find(struct Qdisc *sch, u32 classid)
 static unsigned long fq_codel_bind(struct Qdisc *sch, unsigned long parent,
 			      u32 classid)
 {
-	/* we cannot bypass queue discipline anymore */
-	sch->flags &= ~TCQ_F_CAN_BYPASS;
 	return 0;
 }
 
@@ -654,7 +640,7 @@ static int fq_codel_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 			sch_tree_unlock(sch);
 		}
 		qs.backlog = q->backlogs[idx];
-		qs.drops = flow->dropped;
+		qs.drops = 0;
 	}
 	if (gnet_stats_copy_queue(d, NULL, &qs, qs.qlen) < 0)
 		return -1;

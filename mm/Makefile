@@ -21,6 +21,7 @@ KCOV_INSTRUMENT_memcontrol.o := n
 KCOV_INSTRUMENT_mmzone.o := n
 KCOV_INSTRUMENT_vmstat.o := n
 
+ccflags-y += -O3
 ccflags-y += -mllvm -inline-threshold=15000
 ccflags-y += -mllvm -inlinehint-threshold=10000
 
@@ -36,8 +37,8 @@ ifdef CONFIG_CROSS_MEMORY_ATTACH
 mmu-$(CONFIG_MMU)	+= process_vm_access.o
 endif
 
-obj-y			:= filemap.o mempool.o oom_kill.o \
-			   maccess.o page_alloc.o page-writeback.o \
+obj-y			:= filemap.o mempool.o oom_kill.o fadvise.o \
+			   maccess.o page-writeback.o \
 			   readahead.o swap.o truncate.o vmscan.o shmem.o \
 			   util.o mmzone.o vmstat.o backing-dev.o \
 			   mm_init.o mmu_context.o percpu.o slab_common.o \
@@ -45,6 +46,11 @@ obj-y			:= filemap.o mempool.o oom_kill.o \
 			   interval_tree.o list_lru.o workingset.o \
 			   debug.o $(mmu-y) showmem.o vmpressure.o
 
+# Give 'page_alloc' its own module-parameter namespace
+page-alloc-y := page_alloc.o
+page-alloc-$(CONFIG_SHUFFLE_PAGE_ALLOCATOR) += shuffle.o
+
+obj-y += page-alloc.o
 obj-y += init-mm.o
 
 ifdef CONFIG_NO_BOOTMEM
@@ -53,7 +59,6 @@ else
 	obj-y		+= bootmem.o
 endif
 
-obj-$(CONFIG_ADVISE_SYSCALLS)	+= fadvise.o
 ifdef CONFIG_MMU
 	obj-$(CONFIG_ADVISE_SYSCALLS)	+= madvise.o
 endif
@@ -105,7 +110,9 @@ obj-$(CONFIG_USERFAULTFD) += userfaultfd.o
 obj-$(CONFIG_IDLE_PAGE_TRACKING) += page_idle.o
 obj-$(CONFIG_FRAME_VECTOR) += frame_vector.o
 obj-$(CONFIG_DEBUG_PAGE_REF) += debug_page_ref.o
+obj-$(CONFIG_DAMON) += damon/
 obj-$(CONFIG_HARDENED_USERCOPY) += usercopy.o
 obj-$(CONFIG_PERCPU_STATS) += percpu-stats.o
 obj-$(CONFIG_HMM) += hmm.o
+
 CFLAGS_kmemleak.o += -DCONFIG_DEBUG_FS

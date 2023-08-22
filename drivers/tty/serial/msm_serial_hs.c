@@ -3,7 +3,7 @@
  * MSM 7k High speed uart driver
  *
  * Copyright (c) 2008 Google Inc.
- * Copyright (c) 2007-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2007-2018, 2021 The Linux Foundation. All rights reserved.
  * Modified: Nick Pelly <npelly@google.com>
  *
  * All source code in this file is licensed under the following license
@@ -1870,7 +1870,7 @@ static void msm_hs_sps_tx_callback(struct sps_event_notify *notify)
 		&addr, notify->data.transfer.iovec.size,
 		notify->data.transfer.iovec.flags);
 
-	del_timer(&msm_uport->tx.tx_timeout_timer);
+	del_timer_sync(&msm_uport->tx.tx_timeout_timer);
 	MSM_HS_DBG("%s(): Queue kthread work\n", __func__);
 	kthread_queue_work(&msm_uport->tx.kworker, &msm_uport->tx.kwork);
 }
@@ -2756,6 +2756,7 @@ static int uartdm_init_port(struct uart_port *uport)
 	struct msm_hs_port *msm_uport = UARTDM_TO_MSM(uport);
 	struct msm_hs_tx *tx = &msm_uport->tx;
 	struct msm_hs_rx *rx = &msm_uport->rx;
+	struct sched_param param = { .sched_priority = 1 };
 
 	init_waitqueue_head(&rx->wait);
 	init_waitqueue_head(&tx->wait);
@@ -2770,6 +2771,8 @@ static int uartdm_init_port(struct uart_port *uport)
 		MSM_HS_ERR("%s(): error creating task\n", __func__);
 		goto exit_lh_init;
 	}
+	sched_setscheduler(rx->task, SCHED_FIFO, &param);
+
 	kthread_init_work(&rx->kwork, msm_serial_hs_rx_work);
 
 	kthread_init_worker(&tx->kworker);
@@ -2779,6 +2782,7 @@ static int uartdm_init_port(struct uart_port *uport)
 		MSM_HS_ERR("%s(): error creating task\n", __func__);
 		goto exit_lh_init;
 	}
+	sched_setscheduler(tx->task, SCHED_FIFO, &param);
 
 	kthread_init_work(&tx->kwork, msm_serial_hs_tx_work);
 

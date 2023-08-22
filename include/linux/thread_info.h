@@ -65,15 +65,11 @@ static inline long set_restart_fn(struct restart_block *restart,
 
 static inline void set_ti_thread_flag(struct thread_info *ti, int flag)
 {
-	/* set_bit() with release semantics */
-	smp_mb__before_atomic();
 	set_bit(flag, (unsigned long *)&ti->flags);
 }
 
 static inline void clear_ti_thread_flag(struct thread_info *ti, int flag)
 {
-	/* clear_bit() with release semantics */
-	smp_mb__before_atomic();
 	clear_bit(flag, (unsigned long *)&ti->flags);
 }
 
@@ -88,35 +84,17 @@ static inline void update_ti_thread_flag(struct thread_info *ti, int flag,
 
 static inline int test_and_set_ti_thread_flag(struct thread_info *ti, int flag)
 {
-	atomic_long_t *p = (atomic_long_t *)&ti->flags;
-	const unsigned long mask = BIT_MASK(flag);
-	long old;
-
-	/* test_and_set_bit() sans the unordered test */
-	p += BIT_WORD(flag);
-	old = atomic_long_fetch_or(mask, p);
-	return !!(old & mask);
+	return test_and_set_bit(flag, (unsigned long *)&ti->flags);
 }
 
 static inline int test_and_clear_ti_thread_flag(struct thread_info *ti, int flag)
 {
-	atomic_long_t *p = (atomic_long_t *)&ti->flags;
-	const unsigned long mask = BIT_MASK(flag);
-	long old;
-
-	/* test_and_clear_bit() sans the unordered test */
-	p += BIT_WORD(flag);
-	old = atomic_long_fetch_andnot(mask, p);
-	return !!(old & mask);
+	return test_and_clear_bit(flag, (unsigned long *)&ti->flags);
 }
 
 static inline int test_ti_thread_flag(struct thread_info *ti, int flag)
 {
-	const atomic_long_t *p = (atomic_long_t *)&ti->flags;
-
-	/* test_bit() with acquire semantics */
-	p += BIT_WORD(flag);
-	return !!(atomic_long_read_acquire(p) & BIT_MASK(flag));
+	return test_bit(flag, (unsigned long *)&ti->flags);
 }
 
 #define set_thread_flag(flag) \
@@ -172,7 +150,7 @@ static inline void copy_overflow(int size, unsigned long count)
 static __always_inline bool
 check_copy_size(const void *addr, size_t bytes, bool is_source)
 {
-	int sz = __builtin_object_size(addr, 0);
+	int sz = __compiletime_object_size(addr);
 	if (unlikely(sz >= 0 && sz < bytes)) {
 		if (!__builtin_constant_p(bytes))
 			copy_overflow(sz, bytes);

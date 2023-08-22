@@ -54,6 +54,7 @@
 #include <linux/shmem_fs.h>
 #include <linux/ctype.h>
 #include <linux/debugfs.h>
+#include <linux/simple_lmk.h>
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -166,9 +167,16 @@ struct scan_control {
 #endif
 
 /*
- * From 0 .. 100.  Higher means more swappy.
+ * From 0 .. 200.  Higher means more swappy.
  */
-int vm_swappiness = 20;
+int vm_swappiness = 100;
+#ifdef CONFIG_OPLUS_MM_HACKS
+/*
+ * Direct reclaim swappiness, values range from 0 .. 200. Higher means more swappy.
+ */
+int direct_vm_swappiness = 20;
+#endif /* CONFIG_OPLUS_MM_HACKS */
+
 /*
  * The total number of pages which are beyond the high watermark within all
  * zones.
@@ -264,31 +272,21 @@ unsigned long pgdat_reclaimable_pages(struct pglist_data *pgdat)
  */
 unsigned long lruvec_lru_size(struct lruvec *lruvec, enum lru_list lru, int zone_idx)
 {
-	unsigned long lru_size;
+	unsigned long size = 0;
 	int zid;
 
-	if (!mem_cgroup_disabled())
-		lru_size = mem_cgroup_get_lru_size(lruvec, lru);
-	else
-		lru_size = node_page_state(lruvec_pgdat(lruvec), NR_LRU_BASE + lru);
-
-	for (zid = zone_idx + 1; zid < MAX_NR_ZONES; zid++) {
+	for (zid = 0; zid <= zone_idx && zid < MAX_NR_ZONES; zid++) {
 		struct zone *zone = &lruvec_pgdat(lruvec)->node_zones[zid];
-		unsigned long size;
 
 		if (!managed_zone(zone))
 			continue;
 
 		if (!mem_cgroup_disabled())
-			size = mem_cgroup_get_zone_lru_size(lruvec, lru, zid);
+			size += mem_cgroup_get_zone_lru_size(lruvec, lru, zid);
 		else
-			size = zone_page_state(&lruvec_pgdat(lruvec)->node_zones[zid],
-				       NR_ZONE_LRU_BASE + lru);
-		lru_size -= min(size, lru_size);
+			size += zone_page_state(zone, NR_ZONE_LRU_BASE + lru);
 	}
-
-	return lru_size;
-
+	return size;
 }
 
 /*
@@ -368,9 +366,18 @@ static unsigned long do_shrink_slab(struct shrink_control *shrinkctl,
 	nr = atomic_long_xchg(&shrinker->nr_deferred[nid], 0);
 
 	total_scan = nr;
-	delta = freeable >> priority;
-	delta *= 4;
-	do_div(delta, shrinker->seeks);
+	if (shrinker->seeks) {
+		delta = freeable >> priority;
+		delta *= 4;
+		do_div(delta, shrinker->seeks);
+	} else {
+		/*
+		 * These objects don't require any IO to create. Trim
+		 * them aggressively under memory pressure to keep
+		 * them from causing refetches in the IO caches.
+		 */
+		delta = freeable / 2;
+	}
 
 	total_scan += delta;
 	if (total_scan < 0) {
@@ -562,7 +569,7 @@ static inline int is_page_cache_freeable(struct page *page)
 	return page_count(page) - page_has_private(page) == 1 + radix_pins;
 }
 
-static int may_write_to_inode(struct inode *inode, struct scan_control *sc)
+static int may_write_to_inode(struct inode *inode)
 {
 	if (current->flags & PF_SWAPWRITE)
 		return 1;
@@ -610,8 +617,7 @@ typedef enum {
  * pageout is called by shrink_page_list() for each dirty page.
  * Calls ->writepage().
  */
-static pageout_t pageout(struct page *page, struct address_space *mapping,
-			 struct scan_control *sc)
+static pageout_t pageout(struct page *page, struct address_space *mapping)
 {
 	/*
 	 * If the page is dirty, only perform writeback if that write
@@ -647,7 +653,7 @@ static pageout_t pageout(struct page *page, struct address_space *mapping,
 	}
 	if (mapping->a_ops->writepage == NULL)
 		return PAGE_ACTIVATE;
-	if (!may_write_to_inode(mapping->host, sc))
+	if (!may_write_to_inode(mapping->host))
 		return PAGE_KEEP;
 
 	if (clear_page_dirty_for_io(page)) {
@@ -982,7 +988,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 				      struct scan_control *sc,
 				      enum ttu_flags ttu_flags,
 				      struct reclaim_stat *stat,
-				      bool skip_reference_check)
+				      bool force_reclaim)
 {
 	LIST_HEAD(ret_pages);
 	LIST_HEAD(free_pages);
@@ -1026,7 +1032,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			goto keep_locked;
 
 		/* page_update_gen() tried to promote this page? */
-		if (lru_gen_enabled() && !skip_reference_check &&
+		if (lru_gen_enabled() && !force_reclaim &&
 		    page_mapped(page) && PageReferenced(page))
 			goto keep_locked;
 
@@ -1142,7 +1148,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			}
 		}
 
-		if (!skip_reference_check)
+		if (!force_reclaim)
 			references = page_check_references(page, sc);
 
 		switch (references) {
@@ -1259,7 +1265,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			 * starts and then write it out here.
 			 */
 			try_to_unmap_flush_dirty();
-			switch (pageout(page, mapping, sc)) {
+			switch (pageout(page, mapping)) {
 			case PAGE_KEEP:
 				goto keep_locked;
 			case PAGE_ACTIVATE:
@@ -1436,49 +1442,34 @@ unsigned long reclaim_clean_pages_from_list(struct zone *zone,
 }
 
 #ifdef CONFIG_PROCESS_RECLAIM
-unsigned long reclaim_pages(struct list_head *page_list)
+unsigned long reclaim_pages_from_list(struct list_head *page_list,
+					struct vm_area_struct *vma)
 {
-	unsigned long nr_reclaimed;
-	struct page *page;
-	unsigned long nr_isolated[2] = {0, };
-	struct pglist_data *pgdat = NULL;
 	struct scan_control sc = {
 		.gfp_mask = GFP_KERNEL,
 		.priority = DEF_PRIORITY,
 		.may_writepage = 1,
 		.may_unmap = 1,
 		.may_swap = 1,
+		.target_vma = vma,
 	};
 
-	if (list_empty(page_list))
-		return 0;
+	unsigned long nr_reclaimed;
+	struct page *page;
 
-	list_for_each_entry(page, page_list, lru) {
+	list_for_each_entry(page, page_list, lru)
 		ClearPageActive(page);
-		if (pgdat == NULL)
-			pgdat = page_pgdat(page);
-		/* XXX: It could be multiple node in other config */
-		WARN_ON_ONCE(pgdat != page_pgdat(page));
-		if (!page_is_file_cache(page))
-			nr_isolated[0]++;
-		else
-			nr_isolated[1]++;
-	}
 
-	mod_node_page_state(pgdat, NR_ISOLATED_ANON, nr_isolated[0]);
-	mod_node_page_state(pgdat, NR_ISOLATED_FILE, nr_isolated[1]);
-
-	nr_reclaimed = shrink_page_list(page_list, pgdat, &sc,
-					TTU_IGNORE_ACCESS, NULL, true);
+	nr_reclaimed = shrink_page_list(page_list, NULL, &sc,
+			TTU_IGNORE_ACCESS, NULL, true);
 
 	while (!list_empty(page_list)) {
 		page = lru_to_page(page_list);
 		list_del(&page->lru);
+		dec_node_page_state(page, NR_ISOLATED_ANON +
+				page_is_file_cache(page));
 		putback_lru_page(page);
 	}
-
-	mod_node_page_state(pgdat, NR_ISOLATED_ANON, -nr_isolated[0]);
-	mod_node_page_state(pgdat, NR_ISOLATED_FILE, -nr_isolated[1]);
 
 	return nr_reclaimed;
 }
@@ -1850,6 +1841,10 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
  */
 static int current_may_throttle(void)
 {
+#ifdef CONFIG_OPLUS_MM_HACKS
+	if ((current->signal->oom_score_adj < 0))
+		return 0;
+#endif /* CONFIG_OPLUS_MM_HACKS */
 	return !(current->flags & PF_LESS_THROTTLE) ||
 		current->backing_dev_info == NULL ||
 		bdi_write_congested(current->backing_dev_info);
@@ -2182,6 +2177,62 @@ static void shrink_active_list(unsigned long nr_to_scan,
 			nr_deactivate, nr_rotated, sc->priority, file);
 }
 
+unsigned long reclaim_pages(struct list_head *page_list)
+{
+	int nid = -1;
+	unsigned long nr_reclaimed = 0;
+	LIST_HEAD(node_page_list);
+	struct reclaim_stat dummy_stat;
+	struct page *page;
+	struct scan_control sc = {
+		.gfp_mask = GFP_KERNEL,
+		.priority = DEF_PRIORITY,
+		.may_writepage = 1,
+		.may_unmap = 1,
+		.may_swap = 1,
+	};
+
+	while (!list_empty(page_list)) {
+		page = lru_to_page(page_list);
+		if (nid == -1) {
+			nid = page_to_nid(page);
+			INIT_LIST_HEAD(&node_page_list);
+		}
+
+		if (nid == page_to_nid(page)) {
+			ClearPageActive(page);
+			list_move(&page->lru, &node_page_list);
+			continue;
+		}
+
+		nr_reclaimed += shrink_page_list(&node_page_list,
+						NODE_DATA(nid),
+						&sc, 0,
+						&dummy_stat, false);
+		while (!list_empty(&node_page_list)) {
+			page = lru_to_page(&node_page_list);
+			list_del(&page->lru);
+			putback_lru_page(page);
+		}
+
+		nid = -1;
+	}
+
+	if (!list_empty(&node_page_list)) {
+		nr_reclaimed += shrink_page_list(&node_page_list,
+						NODE_DATA(nid),
+						&sc, 0,
+						&dummy_stat, false);
+		while (!list_empty(&node_page_list)) {
+			page = lru_to_page(&node_page_list);
+			list_del(&page->lru);
+			putback_lru_page(page);
+		}
+	}
+
+	return nr_reclaimed;
+}
+
 /*
  * The inactive anon list should be small enough that the VM never has
  * to do too much work.
@@ -2221,13 +2272,6 @@ static bool inactive_list_is_low(struct lruvec *lruvec, bool file,
 	unsigned long refaults;
 	unsigned long gb;
 
-	/*
-	 * If we don't have swap space, anonymous page deactivation
-	 * is pointless.
-	 */
-	if (!file && !total_swap_pages)
-		return false;
-
 	inactive = lruvec_lru_size(lruvec, inactive_lru, sc->reclaim_idx);
 	active = lruvec_lru_size(lruvec, active_lru, sc->reclaim_idx);
 
@@ -2241,8 +2285,13 @@ static bool inactive_list_is_low(struct lruvec *lruvec, bool file,
 		inactive_ratio = 0;
 	} else {
 		gb = (inactive + active) >> (30 - PAGE_SHIFT);
-		if (gb)
+#ifdef CONFIG_OPLUS_MM_HACKS
+		if (gb && is_file_lru(inactive_lru))
+			inactive_ratio = min(2UL, int_sqrt(10 * gb));
+#else
+		if (gb && is_file_lru(inactive_lru))
 			inactive_ratio = int_sqrt(10 * gb);
+#endif /* CONFIG_OPLUS_MM_HACKS */
 		else
 			inactive_ratio = 1;
 	}
@@ -2298,9 +2347,18 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 	unsigned long anon, file;
 	unsigned long ap, fp;
 	enum lru_list lru;
+#ifdef CONFIG_OPLUS_MM_HACKS
+	unsigned long totalswap = total_swap_pages;
+#endif /* CONFIG_OPLUS_MM_HACKS */
 
+#ifdef CONFIG_OPLUS_MM_HACKS
+	if (!current_is_kswapd())
+		swappiness = direct_vm_swappiness;
+	if (!sc->may_swap || (mem_cgroup_get_nr_swap_pages(memcg) <= totalswap>>6)) {
+#else
 	/* If we have no swap space, do not bother scanning anon pages. */
 	if (!sc->may_swap || mem_cgroup_get_nr_swap_pages(memcg) <= 0) {
+#endif /* CONFIG_OPLUS_MM_HACKS */
 		scan_balance = SCAN_FILE;
 		goto out;
 	}
@@ -2378,8 +2436,7 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 	 * lruvec even if it has plenty of old anonymous pages unless the
 	 * system is under heavy pressure.
 	 */
-	if (!IS_ENABLED(CONFIG_BALANCE_ANON_FILE_RECLAIM) &&
-	    !inactive_list_is_low(lruvec, true, sc, false) &&
+	if (!inactive_list_is_low(lruvec, true, sc, false) &&
 	    lruvec_lru_size(lruvec, LRU_INACTIVE_FILE, sc->reclaim_idx) >> sc->priority) {
 		scan_balance = SCAN_FILE;
 		goto out;
@@ -3840,6 +3897,7 @@ static bool age_lruvec(struct lruvec *lruvec, struct scan_control *sc,
 
 /* to protect the working set of the last N jiffies */
 static unsigned long lru_gen_min_ttl __read_mostly;
+static int lru_gen_min_ttl_unsatisfied;
 
 static void lru_gen_age_node(struct pglist_data *pgdat, struct scan_control *sc)
 {
@@ -3884,14 +3942,22 @@ static void lru_gen_age_node(struct pglist_data *pgdat, struct scan_control *sc)
 	 * younger than min_ttl. However, another theoretical possibility is all
 	 * memcgs are either below min or empty.
 	 */
-	if (!success && !sc->order && mutex_trylock(&oom_lock)) {
-		struct oom_control oc = {
-			.gfp_mask = sc->gfp_mask,
-		};
+	if (!success) {
+		pr_err("mglru: min_ttl unsatisfied, calling OOM killer\n");
+		lru_gen_min_ttl_unsatisfied++;
+#ifdef CONFIG_ANDROID_SIMPLE_LMK
+		simple_lmk_trigger();
+#else
+		if (mutex_trylock(&oom_lock) && !sc->order) {
+			struct oom_control oc = {
+				.gfp_mask = sc->gfp_mask,
+			};
 
-		out_of_memory(&oc);
+			out_of_memory(&oc);
 
-		mutex_unlock(&oom_lock);
+			mutex_unlock(&oom_lock);
+		}
+#endif
 	}
 }
 
@@ -4637,6 +4703,15 @@ static struct kobj_attribute lru_gen_min_ttl_attr = __ATTR(
 	min_ttl_ms, 0644, show_min_ttl, store_min_ttl
 );
 
+static ssize_t show_min_ttl_unsatisfied(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", lru_gen_min_ttl_unsatisfied);
+}
+
+static struct kobj_attribute lru_gen_min_ttl_unsatisfied_attr = __ATTR(
+	min_ttl_unsatisfied, 0444, show_min_ttl_unsatisfied, NULL
+);
+
 static ssize_t show_enable(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	unsigned int caps = 0;
@@ -4685,6 +4760,7 @@ static struct kobj_attribute lru_gen_enabled_attr = __ATTR(
 );
 
 static struct attribute *lru_gen_attrs[] = {
+	&lru_gen_min_ttl_unsatisfied_attr.attr,
 	&lru_gen_min_ttl_attr.attr,
 	&lru_gen_enabled_attr.attr,
 	NULL
@@ -5240,7 +5316,7 @@ static void shrink_node_memcg(struct pglist_data *pgdat, struct mem_cgroup *memc
 	 * Even if we did not try to evict anon pages at all, we want to
 	 * rebalance the anon lru active/inactive ratio.
 	 */
-	if (inactive_list_is_low(lruvec, false, sc, true))
+	if (total_swap_pages && inactive_list_is_low(lruvec, false, sc, true))
 		shrink_active_list(SWAP_CLUSTER_MAX, lruvec,
 				   sc, LRU_ACTIVE_ANON);
 }
@@ -6531,7 +6607,8 @@ int kswapd_run(int nid)
 	if (pgdat->kswapd)
 		return 0;
 
-	pgdat->kshrinkd = kthread_run_perf_critical(cpu_hp_mask, kshrinkd, pgdat, "kshrinkd%d", nid);
+	pgdat->kshrinkd = kthread_run_perf_critical(cpu_hp_mask,
+					kshrinkd, pgdat, "kshrinkd%d", nid);
 	if (IS_ERR(pgdat->kshrinkd)) {
 		/* failure at boot is fatal */
 		BUG_ON(system_state < SYSTEM_RUNNING);
@@ -6541,7 +6618,8 @@ int kswapd_run(int nid)
 		return ret;
 	}
 
-	pgdat->kswapd = kthread_run_perf_critical(cpu_hp_mask, kswapd, pgdat, "kswapd%d", nid);
+	pgdat->kswapd = kthread_run_perf_critical(cpu_hp_mask, kswapd,
+					pgdat, "kswapd%d", nid);
 	if (IS_ERR(pgdat->kswapd)) {
 		/* failure at boot is fatal */
 		BUG_ON(system_state < SYSTEM_RUNNING);

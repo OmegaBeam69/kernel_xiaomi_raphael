@@ -46,9 +46,7 @@
 #include "adsprpc_shared.h"
 #include <soc/qcom/ramdump.h>
 #include <linux/debugfs.h>
-#include <linux/pm_qos.h>
 #include <linux/stat.h>
-#include <linux/cpumask.h>
 
 #define TZ_PIL_PROTECT_MEM_SUBSYS_ID 0x0C
 #define TZ_PIL_CLEAR_PROTECT_MEM_SUBSYS_ID 0x0D
@@ -182,11 +180,6 @@ struct secure_vm {
 	int *vmid;
 	int *vmperm;
 	int vmcount;
-};
-
-struct qos_cores {
-	int *coreno;
-	int corecount;
 };
 
 struct fastrpc_file;
@@ -330,7 +323,6 @@ struct fastrpc_apps {
 	struct wakeup_source *wake_source_secure;
 	/* Non-secure subsystem like CDSP will use regular client */
 	struct wakeup_source *wake_source;
-	struct qos_cores silvercores;
 };
 
 struct fastrpc_mmap {
@@ -407,7 +399,6 @@ struct fastrpc_file {
 	struct hlist_head perf;
 	struct dentry *debugfs_file;
 	struct mutex perf_mutex;
-	struct pm_qos_request pm_qos_req;
 	int qos_request;
 	struct mutex pm_qos_mutex;
 	struct mutex map_mutex;
@@ -2189,6 +2180,12 @@ static int fastrpc_init_process(struct fastrpc_file *fl,
 		remote_arg_t ra[1];
 		int tgid = fl->tgid;
 
+		if (fl->dev_minor == MINOR_NUM_DEV) {
+			err = -ECONNREFUSED;
+			pr_err("adsprpc: %s: untrusted app trying to attach to privileged DSP PD\n",
+				__func__);
+			return err;
+		}
 		ra[0].buf.pv = (void *)&tgid;
 		ra[0].buf.len = sizeof(tgid);
 		ioctl.inv.handle = FASTRPC_STATIC_HANDLE_PROCESS_GROUP;
@@ -2312,6 +2309,13 @@ static int fastrpc_init_process(struct fastrpc_file *fl,
 			unsigned int namelen;
 			unsigned int pageslen;
 		} inbuf;
+
+		if (fl->dev_minor == MINOR_NUM_DEV) {
+			err = -ECONNREFUSED;
+			pr_err("adsprpc: %s: untrusted app trying to attach to audio PD\n",
+				__func__);
+			return err;
+		}
 
 		if (!init->filelen)
 			goto bail;
@@ -2866,7 +2870,9 @@ static int fastrpc_internal_munmap(struct fastrpc_file *fl,
 
 	VERIFY(err, fl->dsp_proc_init == 1);
 	if (err) {
-		err = -EHOSTDOWN;
+		pr_err("adsprpc: ERROR: %s: user application %s trying to unmap without initialization\n",
+			 __func__, current->comm);
+		err = -EBADR;
 		return err;
 	}
 	mutex_lock(&fl->internal_map_mutex);
@@ -2939,7 +2945,9 @@ static int fastrpc_internal_munmap_fd(struct fastrpc_file *fl,
 		return err;
 	VERIFY(err, fl->dsp_proc_init == 1);
 	if (err) {
-		err = -EHOSTDOWN;
+		pr_err("adsprpc: ERROR: %s: user application %s trying to unmap without initialization\n",
+			__func__, current->comm);
+		err = -EBADR;
 		return err;
 	}
 	mutex_lock(&fl->internal_map_mutex);
@@ -2974,7 +2982,9 @@ static int fastrpc_internal_mmap(struct fastrpc_file *fl,
 
 	VERIFY(err, fl->dsp_proc_init == 1);
 	if (err) {
-		err = -EHOSTDOWN;
+		pr_err("adsprpc: ERROR: %s: user application %s trying to map without initialization\n",
+			__func__, current->comm);
+		err = -EBADR;
 		return err;
 	}
 	mutex_lock(&fl->internal_map_mutex);
@@ -3266,8 +3276,6 @@ static int fastrpc_device_release(struct inode *inode, struct file *file)
 	struct fastrpc_file *fl = (struct fastrpc_file *)file->private_data;
 
 	if (fl) {
-		if (fl->qos_request && pm_qos_request_active(&fl->pm_qos_req))
-			pm_qos_remove_request(&fl->pm_qos_req);
 		if (fl->debugfs_file != NULL)
 			debugfs_remove(fl->debugfs_file);
 		fastrpc_file_free(fl);
@@ -3718,10 +3726,6 @@ static int fastrpc_internal_control(struct fastrpc_file *fl,
 					struct fastrpc_ioctl_control *cp)
 {
 	int err = 0;
-	int latency;
-	cpumask_t mask;
-	struct fastrpc_apps *me = &gfa;
-	u32 len = me->silvercores.corecount, i = 0;
 
 	VERIFY(err, !IS_ERR_OR_NULL(fl) && !IS_ERR_OR_NULL(fl->apps));
 	if (err)
@@ -3731,26 +3735,6 @@ static int fastrpc_internal_control(struct fastrpc_file *fl,
 		goto bail;
 
 	switch (cp->req) {
-	case FASTRPC_CONTROL_LATENCY:
-		latency = cp->lp.enable == FASTRPC_LATENCY_CTRL_ENB ?
-			fl->apps->latency : PM_QOS_DEFAULT_VALUE;
-		VERIFY(err, latency != 0);
-		if (err)
-			goto bail;
-		mutex_lock(&fl->pm_qos_mutex);
-		cpumask_clear(&mask);
-		for (i = 0; i < len; i++)
-			cpumask_set_cpu(me->silvercores.coreno[i], &mask);
-		fl->pm_qos_req.type = PM_QOS_REQ_AFFINE_CORES;
-		fl->pm_qos_req.cpus_affine = *cpumask_bits(&mask);
-		if (!fl->qos_request) {
-			pm_qos_add_request(&fl->pm_qos_req,
-				PM_QOS_CPU_DMA_LATENCY, latency);
-			fl->qos_request = 1;
-		} else
-			pm_qos_update_request(&fl->pm_qos_req, latency);
-		mutex_unlock(&fl->pm_qos_mutex);
-		break;
 	case FASTRPC_CONTROL_KALLOC:
 		cp->kalloc.kalloc_support = 1;
 		break;
@@ -4493,39 +4477,6 @@ bail:
 	}
 }
 
-static void init_qos_cores_list(struct device *dev, char *prop_name,
-						struct qos_cores *silvercores)
-{
-	int err = 0;
-	u32 len = 0, i = 0;
-	u32 *coreslist = NULL;
-
-	if (!of_find_property(dev->of_node, prop_name, &len))
-		goto bail;
-	if (len == 0)
-		goto bail;
-	len /= sizeof(u32);
-	VERIFY(err, NULL != (coreslist = kcalloc(len, sizeof(u32),
-						 GFP_KERNEL)));
-	if (err)
-		goto bail;
-	for (i = 0; i < len; i++) {
-		err = of_property_read_u32_index(dev->of_node, prop_name, i,
-								&coreslist[i]);
-		if (err) {
-			pr_err("adsprpc: %s: failed to read QOS cores list\n",
-								 __func__);
-			goto bail;
-		}
-	}
-	silvercores->coreno = coreslist;
-	silvercores->corecount = len;
-bail:
-	if (err) {
-		kfree(coreslist);
-	}
-}
-
 static void configure_secure_channels(uint32_t secure_domains)
 {
 	struct fastrpc_apps *me = &gfa;
@@ -4562,8 +4513,7 @@ static int fastrpc_probe(struct platform_device *pdev)
 					"qcom,msm-fastrpc-compute")) {
 		init_secure_vmid_list(dev, "qcom,adsp-remoteheap-vmid",
 							&gcinfo[0].rhvm);
-		init_qos_cores_list(dev, "qcom,qos-cores",
-							&me->silvercores);
+
 
 		of_property_read_u32(dev->of_node, "qcom,rpc-latency-us",
 			&me->latency);
@@ -4811,8 +4761,10 @@ static int __init fastrpc_device_init(void)
 
 	debugfs_root = debugfs_create_dir("adsprpc", NULL);
 	if (IS_ERR_OR_NULL(debugfs_root)) {
+		#ifdef CONFIG_DEBUG_FS
 		pr_warn("Error: %s: %s: failed to create debugfs root dir\n",
 			current->comm, __func__);
+		#endif
 		debugfs_remove_recursive(debugfs_root);
 		debugfs_root = NULL;
 	}

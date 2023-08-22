@@ -5273,7 +5273,11 @@ static int dsi_display_bind(struct device *dev,
 		goto error;
 	}
 
-	dsi_display_debugfs_init(display);
+	rc = dsi_display_debugfs_init(display);
+	if (rc) {
+		pr_debug("[%s] debugfs init failed, rc=%d\n", display->name, rc);
+		goto error;
+	}
 
 	atomic_set(&display->clkrate_change_pending, 0);
 	display->cached_clk_rate = 0;
@@ -6224,7 +6228,10 @@ int dsi_display_get_info(struct drm_connector *connector,
 	info->max_width = 1920;
 	info->max_height = 1080;
 	info->qsync_min_fps =
-		display->panel->qsync_min_fps;
+		display->panel->qsync_caps.qsync_min_fps;
+	info->has_qsync_min_fps_list =
+		(display->panel->qsync_caps.qsync_min_fps_list_len > 0) ?
+		true : false;
 
 	switch (display->panel->panel_mode) {
 	case DSI_OP_VIDEO_MODE:
@@ -6631,6 +6638,24 @@ int dsi_display_get_panel_vfp(void *dsi_display,
 	mutex_unlock(&display->display_lock);
 
 	return rc;
+}
+
+int dsi_display_get_qsync_min_fps(void *display_dsi, u32 mode_fps)
+{
+	struct dsi_display *display = (struct dsi_display *)display_dsi;
+	struct dsi_panel *panel;
+	u32 i;
+
+	if (display == NULL || display->panel == NULL)
+		return -EINVAL;
+
+	panel = display->panel;
+	for (i = 0; i < panel->dfps_caps.dfps_list_len; i++) {
+		if (panel->dfps_caps.dfps_list[i] == mode_fps)
+			return panel->qsync_caps.qsync_min_fps_list[i];
+	}
+	SDE_EVT32(mode_fps);
+	return -EINVAL;
 }
 
 int dsi_display_find_mode(struct dsi_display *display,
@@ -7462,7 +7487,7 @@ static int dsi_display_qsync(struct dsi_display *display, bool enable)
 	int i;
 	int rc = 0;
 
-	if (!display->panel->qsync_min_fps) {
+	if (!display->panel->qsync_caps.qsync_min_fps) {
 		pr_debug("%s:ERROR: qsync set, but no fps\n", __func__);
 		return 0;
 	}
@@ -7491,7 +7516,7 @@ static int dsi_display_qsync(struct dsi_display *display, bool enable)
 	}
 
 exit:
-	SDE_EVT32(enable, display->panel->qsync_min_fps, rc);
+	SDE_EVT32(enable, display->panel->qsync_caps.qsync_min_fps, rc);
 	mutex_unlock(&display->display_lock);
 	return rc;
 }
@@ -7707,7 +7732,7 @@ int dsi_display_enable(struct dsi_display *display)
 	mode = display->panel->cur_mode;
 
 	if (mode->dsi_mode_flags & DSI_MODE_FLAG_DMS) {
-		rc = dsi_panel_post_switch(display->panel);
+		rc = dsi_panel_switch(display->panel);
 		if (rc) {
 			pr_debug("[%s] failed to switch DSI panel mode, rc=%d\n",
 				   display->name, rc);
@@ -7734,7 +7759,7 @@ int dsi_display_enable(struct dsi_display *display)
 	}
 
 	if (mode->dsi_mode_flags & DSI_MODE_FLAG_DMS) {
-		rc = dsi_panel_switch(display->panel);
+		rc = dsi_panel_post_switch(display->panel);
 		if (rc)
 			pr_debug("[%s] failed to switch DSI panel mode, rc=%d\n",
 				   display->name, rc);

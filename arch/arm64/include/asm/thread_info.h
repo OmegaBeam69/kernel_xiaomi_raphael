@@ -43,7 +43,7 @@ struct thread_info {
 #ifdef CONFIG_ARM64_SW_TTBR0_PAN
 	u64			ttbr0;		/* saved TTBR0_EL1 */
 #endif
-        union {
+	union {
 		u64		preempt_count;	/* 0 => preemptible, <0 => bug */
 		struct {
 #ifdef CONFIG_CPU_BIG_ENDIAN

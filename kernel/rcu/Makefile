@@ -3,6 +3,7 @@
 # and is generally not a function of system call inputs.
 KCOV_INSTRUMENT := n
 
+ccflags-y += -O3
 ccflags-y += -mllvm -inline-threshold=15000
 ccflags-y += -mllvm -inlinehint-threshold=10000
 

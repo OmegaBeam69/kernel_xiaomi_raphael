@@ -227,11 +227,6 @@ static void delayed_put_task_struct(struct rcu_head *rhp)
 	put_task_struct(tsk);
 }
 
-void put_task_struct_rcu_user(struct task_struct *task)
-{
-	if (refcount_dec_and_test(&task->rcu_users))
-		call_rcu(&task->rcu, delayed_put_task_struct);
-}
 
 void release_task(struct task_struct *p)
 {
@@ -272,7 +267,7 @@ repeat:
 
 	write_unlock_irq(&tasklist_lock);
 	release_thread(p);
-	put_task_struct_rcu_user(p);
+	call_rcu(&p->rcu, delayed_put_task_struct);
 
 	p = leader;
 	if (unlikely(zap_leader))
@@ -473,7 +468,7 @@ retry:
 	 * freed task structure.
 	 */
 	if (atomic_read(&mm->mm_users) <= 1) {
-		mm->owner = NULL;
+		WRITE_ONCE(mm->owner, NULL);
 		return;
 	}
 
@@ -513,7 +508,7 @@ retry:
 	 * most likely racing with swapoff (try_to_unuse()) or /proc or
 	 * ptrace or page migration (get_task_mm()).  Mark owner as NULL.
 	 */
-	mm->owner = NULL;
+	WRITE_ONCE(mm->owner, NULL);
 	return;
 
 assign_new_owner:
@@ -534,7 +529,7 @@ assign_new_owner:
 		put_task_struct(c);
 		goto retry;
 	}
-	mm->owner = c;
+	WRITE_ONCE(mm->owner, c);
 	lru_gen_migrate_mm(mm);
 	task_unlock(c);
 	put_task_struct(c);

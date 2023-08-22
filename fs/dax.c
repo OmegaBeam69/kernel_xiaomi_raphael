@@ -565,7 +565,7 @@ static void *dax_insert_mapping_entry(struct address_space *mapping,
 		ret = __radix_tree_lookup(page_tree, index, &node, &slot);
 		WARN_ON_ONCE(ret != entry);
 		__radix_tree_replace(page_tree, node, slot,
-				     new_entry, NULL, NULL);
+				     new_entry, NULL);
 		entry = new_entry;
 	}
 
@@ -938,7 +938,7 @@ EXPORT_SYMBOL_GPL(__dax_zero_page_range);
 
 static sector_t dax_iomap_sector(struct iomap *iomap, loff_t pos)
 {
-	return iomap->blkno + (((pos & PAGE_MASK) - iomap->offset) >> 9);
+	return (iomap->addr + (pos & PAGE_MASK) - iomap->offset) >> 9;
 }
 
 static loff_t

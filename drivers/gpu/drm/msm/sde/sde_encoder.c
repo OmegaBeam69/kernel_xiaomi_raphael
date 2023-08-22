@@ -1814,18 +1814,12 @@ static void _sde_encoder_dsc_disable(struct sde_encoder_virt *sde_enc)
 	struct sde_hw_ctl *hw_ctl = NULL;
 	struct sde_ctl_dsc_cfg cfg;
 
-	if (!sde_enc || !sde_enc->phys_encs[0]) {
+	if (!sde_enc || !sde_enc->phys_encs[0] ||
+			!sde_enc->phys_encs[0]->connector) {
 		SDE_ERROR("invalid params %d %d\n",
 			!sde_enc, sde_enc ? !sde_enc->phys_encs[0] : -1);
 		return;
 	}
-
-	/*
-	 * Connector can be null if the first virt modeset after suspend
-	 * is called with dynamic clock or dms enabled.
-	 */
-	if (!sde_enc->phys_encs[0]->connector)
-		return;
 
 	if (sde_enc->cur_master)
 		hw_ctl = sde_enc->cur_master->hw_ctl;
@@ -1893,7 +1887,7 @@ static int _sde_encoder_update_rsc_client(
 	struct msm_mode_info mode_info;
 	int wait_vblank_crtc_id = SDE_RSC_INVALID_CRTC_ID;
 	int wait_count = 0;
-	struct drm_crtc *primary_crtc = NULL;
+	struct drm_crtc *primary_crtc;
 	int pipe = -1;
 	int rc = 0;
 	int wait_refcount = 0;
@@ -1944,17 +1938,35 @@ static int _sde_encoder_update_rsc_client(
 		qsync_mode = sde_connector_get_qsync_mode(
 				sde_enc->cur_master->connector);
 
-	if (sde_encoder_in_clone_mode(drm_enc))
-		rsc_state = enable ? SDE_RSC_CLK_STATE :
+	if (IS_SDE_MAJOR_SAME(sde_kms->core_rev, SDE_HW_VER_620)) {
+		if (sde_encoder_in_clone_mode(drm_enc) ||
+			!disp_info->is_primary || (disp_info->is_primary &&
+				qsync_mode))
+			rsc_state = enable ? SDE_RSC_CLK_STATE :
+					SDE_RSC_IDLE_STATE;
+		else if (sde_encoder_check_curr_mode(drm_enc,
+				MSM_DISPLAY_CMD_MODE))
+			rsc_state = enable ? SDE_RSC_CMD_STATE :
+					SDE_RSC_IDLE_STATE;
+		else if (sde_encoder_check_curr_mode(drm_enc,
+				MSM_DISPLAY_VIDEO_MODE))
+			rsc_state = enable ? SDE_RSC_VID_STATE :
+					SDE_RSC_IDLE_STATE;
+	} else {
+		if (sde_encoder_in_clone_mode(drm_enc))
+			rsc_state = enable ? SDE_RSC_CLK_STATE :
+					SDE_RSC_IDLE_STATE;
+		else
+			rsc_state = enable ? ((disp_info->is_primary &&
+				(sde_encoder_check_curr_mode(drm_enc,
+				MSM_DISPLAY_CMD_MODE)) && !qsync_mode) ?
+				SDE_RSC_CMD_STATE : SDE_RSC_VID_STATE) :
 				SDE_RSC_IDLE_STATE;
-	else
-		rsc_state = enable ? (((disp_info->capabilities &
-			MSM_DISPLAY_CAP_CMD_MODE) &&
-			disp_info->is_primary && !qsync_mode) ?
-			SDE_RSC_CMD_STATE : SDE_RSC_VID_STATE) :
-			SDE_RSC_IDLE_STATE;
+	}
 
-	rsc_state = SDE_RSC_CLK_STATE;
+	if (IS_SDE_MAJOR_SAME(sde_kms->core_rev, SDE_HW_VER_620) &&
+			(rsc_state == SDE_RSC_VID_STATE))
+		rsc_state = SDE_RSC_CLK_STATE;
 
 	SDE_EVT32(rsc_state, qsync_mode);
 
@@ -3260,9 +3272,7 @@ static void sde_encoder_virt_enable(struct drm_encoder *drm_enc)
 			sde_enc->input_handler_registered = true;
 	}
 
-	if ((drm_enc->crtc->state->connectors_changed &&
-			sde_encoder_in_clone_mode(drm_enc)) ||
-			!(msm_is_mode_seamless_vrr(cur_mode)
+	if (!(msm_is_mode_seamless_vrr(cur_mode)
 			|| msm_is_mode_seamless_dms(cur_mode)
 			|| msm_is_mode_seamless_dyn_clk(cur_mode)))
 		kthread_init_delayed_work(&sde_enc->delayed_off_work,
@@ -3539,10 +3549,6 @@ static void sde_encoder_vblank_callback(struct drm_encoder *drm_enc,
 	SDE_ATRACE_BEGIN("encoder_vblank_callback");
 	sde_enc = to_sde_encoder_virt(drm_enc);
 
-	if (sde_encoder_in_clone_mode(drm_enc)) {
-		return;
-	}
-
 	spin_lock_irqsave(&sde_enc->enc_spinlock, lock_flags);
 	if (sde_enc->crtc_vblank_cb)
 		sde_enc->crtc_vblank_cb(sde_enc->crtc_vblank_cb_data);
@@ -3701,10 +3707,12 @@ static void sde_encoder_frame_done_callback(
 
 static void sde_encoder_get_qsync_fps_callback(
 	struct drm_encoder *drm_enc,
-	u32 *qsync_fps)
+	u32 *qsync_fps, u32 vrr_fps)
 {
 	struct msm_display_info *disp_info;
 	struct sde_encoder_virt *sde_enc;
+	int rc = 0;
+	struct sde_connector *sde_conn;
 
 	if (!qsync_fps)
 		return;
@@ -3718,6 +3726,31 @@ static void sde_encoder_get_qsync_fps_callback(
 	sde_enc = to_sde_encoder_virt(drm_enc);
 	disp_info = &sde_enc->disp_info;
 	*qsync_fps = disp_info->qsync_min_fps;
+
+	/**
+	 * If "dsi-supported-qsync-min-fps-list" is defined, get
+	 * the qsync min fps corresponding to the fps in dfps list
+	 */
+	if (disp_info->has_qsync_min_fps_list) {
+
+		if (!sde_enc->cur_master ||
+			!(sde_enc->disp_info.capabilities &
+				MSM_DISPLAY_CAP_VID_MODE)) {
+			SDE_ERROR("invalid qsync settings %b\n",
+				!sde_enc->cur_master);
+			return;
+		}
+		sde_conn = to_sde_connector(sde_enc->cur_master->connector);
+
+		if (sde_conn->ops.get_qsync_min_fps)
+			rc = sde_conn->ops.get_qsync_min_fps(sde_conn->display,
+				vrr_fps);
+		if (rc <= 0) {
+			SDE_ERROR("invalid qsync min fps %d\n", rc);
+			return;
+		}
+		*qsync_fps = rc;
+	}
 }
 
 int sde_encoder_idle_request(struct drm_encoder *drm_enc)
@@ -5468,21 +5501,14 @@ struct drm_encoder *sde_encoder_init_with_ops(
 		if (phys->ops.is_master && phys->ops.is_master(phys))
 			intf_index = phys->intf_idx - INTF_0;
 	}
-	/*
-	 * if phy is inited from external, we'll let external drivers to
-	 * create rsc client if needed.
-	 */
-	if (!sde_enc->ops.phys_init) {
-		snprintf(name, SDE_NAME_SIZE, "rsc_enc%u", drm_enc->base.id);
-		sde_enc->rsc_client =
-			sde_rsc_client_create(SDE_RSC_INDEX, name,
-			disp_info->is_primary ? SDE_RSC_PRIMARY_DISP_CLIENT :
-			SDE_RSC_EXTERNAL_DISP_CLIENT, intf_index + 1);
-		if (IS_ERR_OR_NULL(sde_enc->rsc_client)) {
-			SDE_DEBUG("sde rsc client create failed :%ld\n",
-					PTR_ERR(sde_enc->rsc_client));
-			sde_enc->rsc_client = NULL;
-		}
+	snprintf(name, SDE_NAME_SIZE, "rsc_enc%u", drm_enc->base.id);
+	sde_enc->rsc_client = sde_rsc_client_create(SDE_RSC_INDEX, name,
+		disp_info->is_primary ? SDE_RSC_PRIMARY_DISP_CLIENT :
+		SDE_RSC_EXTERNAL_DISP_CLIENT, intf_index + 1);
+	if (IS_ERR_OR_NULL(sde_enc->rsc_client)) {
+		SDE_DEBUG("sde rsc client create failed :%ld\n",
+						PTR_ERR(sde_enc->rsc_client));
+		sde_enc->rsc_client = NULL;
 	}
 
 	if (disp_info->capabilities & MSM_DISPLAY_CAP_CMD_MODE) {

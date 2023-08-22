@@ -762,7 +762,8 @@ struct devkmsg_user {
 
 static ssize_t devkmsg_write(struct kiocb *iocb, struct iov_iter *from)
 {
-	char buf[LOG_LINE_MAX + 1], *line;
+	char *line;
+	char buf[LOG_LINE_MAX + PREFIX_MAX];
 	int level = default_message_loglevel;
 	int facility = 1;	/* LOG_USER */
 	struct file *file = iocb->ki_filp;
@@ -783,9 +784,10 @@ static ssize_t devkmsg_write(struct kiocb *iocb, struct iov_iter *from)
 			return ret;
 	}
 
+	memset(&buf, 0, LOG_LINE_MAX + PREFIX_MAX);
+
 	buf[len] = '\0';
 	if (!copy_from_iter_full(buf, len, from)) {
-		kfree(buf);
 		return -EFAULT;
 	}
 
@@ -811,10 +813,21 @@ static ssize_t devkmsg_write(struct kiocb *iocb, struct iov_iter *from)
 			endp++;
 			len -= endp - line;
 			line = endp;
+			if (strstr(line, "healthd") ||
+				strstr(line, "cacert") ||
+				strncmp(line, "logd: Skipping", sizeof("logd: Skipping")))
+				goto free;
 		}
 	}
 
+	if (strncmp("healthd", line, 7) == 0 ||
+		strncmp("init: DM_DEV_STATUS failed", line, 26) == 0) {
+		kfree(buf);
+		return len;
+	}
+
 	printk_emit(facility, level, NULL, 0, "%s", line);
+free:
 	return ret;
 }
 
@@ -1301,6 +1314,8 @@ static int syslog_print(char __user *buf, int size)
 	struct printk_log *msg;
 	int len = 0;
 
+	memset(&text, 0, LOG_LINE_MAX + PREFIX_MAX);
+
 	while (size > 0) {
 		size_t n;
 		size_t skip;
@@ -1353,12 +1368,10 @@ static int syslog_print(char __user *buf, int size)
 
 static int syslog_print_all(char __user *buf, int size, bool clear)
 {
-	char *text;
+	char text[LOG_LINE_MAX + PREFIX_MAX];
 	int len = 0;
 
-	text = kmalloc(LOG_LINE_MAX + PREFIX_MAX, GFP_KERNEL);
-	if (!text)
-		return -ENOMEM;
+	memset(&text, 0, LOG_LINE_MAX + PREFIX_MAX);
 
 	logbuf_lock_irq();
 	if (buf) {
@@ -1429,7 +1442,6 @@ static int syslog_print_all(char __user *buf, int size, bool clear)
 	}
 	logbuf_unlock_irq();
 
-	kfree(text);
 	return len;
 }
 
@@ -2032,26 +2044,6 @@ static bool suppress_message_printing(int level) { return false; }
 
 #endif /* CONFIG_PRINTK */
 
-#ifdef CONFIG_EARLY_PRINTK
-struct console *early_console;
-
-asmlinkage __visible void early_printk(const char *fmt, ...)
-{
-	va_list ap;
-	char buf[512];
-	int n;
-
-	if (!early_console)
-		return;
-
-	va_start(ap, fmt);
-	n = vscnprintf(buf, sizeof(buf), fmt, ap);
-	va_end(ap);
-
-	early_console->write(early_console, buf, n);
-}
-#endif
-
 static int __add_preferred_console(char *name, int idx, char *options,
 				   char *brl_options)
 {
@@ -2177,7 +2169,6 @@ void suspend_console(void)
 {
 	if (!console_suspend_enabled)
 		return;
-	printk("Suspending console(s) (use no_console_suspend to debug)\n");
 	console_lock();
 	console_suspended = 1;
 	up_console_sem();

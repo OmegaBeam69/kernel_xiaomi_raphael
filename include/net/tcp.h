@@ -410,7 +410,6 @@ static inline void tcp_dec_quickack_mode(struct sock *sk,
 #define	TCP_ECN_QUEUE_CWR	2
 #define	TCP_ECN_DEMAND_CWR	4
 #define	TCP_ECN_SEEN		8
-#define	TCP_ECN_ECT_PERMANENT	16
 
 enum tcp_tw_status {
 	TCP_TW_SUCCESS = 0,
@@ -766,7 +765,17 @@ static inline u32 tcp_time_stamp_raw(void)
 	return div_u64(tcp_clock_ns(), NSEC_PER_SEC / TCP_TS_HZ);
 }
 
-void tcp_mstamp_refresh(struct tcp_sock *tp);
+
+/* Refresh 1us clock of a TCP socket,
+ * ensuring monotically increasing values.
+ */
+static inline void tcp_mstamp_refresh(struct tcp_sock *tp)
+{
+	u64 val = tcp_clock_us();
+
+	if (val > tp->tcp_mstamp)
+		tp->tcp_mstamp = val;
+}
 
 static inline u32 tcp_stamp_us_delta(u64 t1, u64 t0)
 {
@@ -856,11 +865,6 @@ struct tcp_skb_cb {
 			u32 first_tx_mstamp;
 			/* when we reached the "delivered" count */
 			u32 delivered_mstamp;
-#define TCPCB_IN_FLIGHT_BITS 20
-#define TCPCB_IN_FLIGHT_MAX ((1U << TCPCB_IN_FLIGHT_BITS) - 1)
-			u32 in_flight:20,   /* packets in flight at transmit */
-			    unused2:12;
-			u32 lost;	/* packets lost so far upon tx of skb */
 		} tx;   /* only used for outgoing skbs */
 		union {
 			struct inet_skb_parm	h4;
@@ -988,8 +992,6 @@ enum tcp_ca_ack_event_flags {
 #define TCP_CONG_NON_RESTRICTED 0x1
 /* Requires ECN/ECT set on all packets */
 #define TCP_CONG_NEEDS_ECN	0x2
-/* Wants notification of CE events (CA_EVENT_ECN_IS_CE, CA_EVENT_ECN_NO_CE). */
-#define TCP_CONG_WANTS_CE_EVENTS	0x100000
 
 union tcp_cc_info;
 
@@ -1009,13 +1011,10 @@ struct ack_sample {
  */
 struct rate_sample {
 	u64  prior_mstamp; /* starting timestamp for interval */
-	u32  prior_lost;	/* tp->lost at "prior_mstamp" */
 	u32  prior_delivered;	/* tp->delivered at "prior_mstamp" */
 	u32  prior_delivered_ce;/* tp->delivered_ce at "prior_mstamp" */
-	u32 tx_in_flight;	/* packets in flight at starting timestamp */
-	s32  lost;		/* number of packets lost over interval */
 	s32  delivered;		/* number of packets delivered over interval */
-	s32  delivered_ce;	/* packets delivered w/ CE mark over interval */
+	s32  delivered_ce;	/* number of packets delivered w/ CE marks*/
 	long interval_us;	/* time for tp->delivered to incr "delivered" */
 	long rtt_us;		/* RTT of last (S)ACKed packet (or -1) */
 	int  losses;		/* number of packets marked lost upon ACK */
@@ -1024,7 +1023,6 @@ struct rate_sample {
 	bool is_app_limited;	/* is sample from packet with bubble in pipe? */
 	bool is_retrans;	/* is sample from retransmission? */
 	bool is_ack_delayed;	/* is this (likely) a delayed ACK? */
-	bool is_ece;		/* did this ACK have ECN marked? */
 };
 
 struct tcp_congestion_ops {
@@ -1051,12 +1049,10 @@ struct tcp_congestion_ops {
 	u32  (*undo_cwnd)(struct sock *sk);
 	/* hook for packet ack accounting (optional) */
 	void (*pkts_acked)(struct sock *sk, const struct ack_sample *sample);
-	/* pick target number of segments per TSO/GSO skb (optional): */
-	u32 (*tso_segs)(struct sock *sk, unsigned int mss_now);
+	/* override sysctl_tcp_min_tso_segs */
+	u32 (*min_tso_segs)(struct sock *sk);
 	/* returns the multiplier used in tcp_sndbuf_expand (optional) */
 	u32 (*sndbuf_expand)(struct sock *sk);
-	/* react to a specific lost skb (optional) */
-	void (*skb_marked_lost)(struct sock *sk, const struct sk_buff *skb);
 	/* call when packets are delivered to update cwnd and pacing rate,
 	 * after all the ca_state processing. (optional)
 	 */
@@ -1101,14 +1097,6 @@ static inline char *tcp_ca_get_name_by_key(u32 key, char *buffer)
 }
 #endif
 
-static inline bool tcp_ca_wants_ce_events(const struct sock *sk)
-{
-	const struct inet_connection_sock *icsk = inet_csk(sk);
-
-	return icsk->icsk_ca_ops->flags & (TCP_CONG_NEEDS_ECN |
-					   TCP_CONG_WANTS_CE_EVENTS);
-}
-
 static inline bool tcp_ca_needs_ecn(const struct sock *sk)
 {
 	const struct inet_connection_sock *icsk = inet_csk(sk);
@@ -1134,7 +1122,6 @@ static inline void tcp_ca_event(struct sock *sk, const enum tcp_ca_event event)
 }
 
 /* From tcp_rate.c */
-void tcp_set_tx_in_flight(struct sock *sk, struct sk_buff *skb);
 void tcp_rate_skb_sent(struct sock *sk, struct sk_buff *skb);
 void tcp_rate_skb_delivered(struct sock *sk, struct sk_buff *skb,
 			    struct rate_sample *rs);
@@ -1333,6 +1320,16 @@ static inline bool tcp_checksum_complete(struct sk_buff *skb)
 }
 
 bool tcp_add_backlog(struct sock *sk, struct sk_buff *skb);
+
+void __sk_defer_free_flush(struct sock *sk);
+
+static inline void sk_defer_free_flush(struct sock *sk)
+{
+	if (llist_empty(&sk->defer_list))
+		return;
+	__sk_defer_free_flush(sk);
+}
+
 int tcp_filter(struct sock *sk, struct sk_buff *skb);
 
 #undef STATE_TRACE
@@ -2093,9 +2090,13 @@ static inline void tcp_segs_in(struct tcp_sock *tp, const struct sk_buff *skb)
 	u16 segs_in;
 
 	segs_in = max_t(u16, 1, skb_shinfo(skb)->gso_segs);
-	tp->segs_in += segs_in;
+
+	/* We update these fields while other threads might
+	 * read them from tcp_get_info()
+	 */
+	WRITE_ONCE(tp->segs_in, tp->segs_in + segs_in);
 	if (skb->len > tcp_hdrlen(skb))
-		tp->data_segs_in += segs_in;
+		WRITE_ONCE(tp->data_segs_in, tp->data_segs_in + segs_in);
 }
 
 /*

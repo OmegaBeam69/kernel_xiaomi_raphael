@@ -95,6 +95,8 @@
 #include <linux/cpufreq_times.h>
 #include <linux/scs.h>
 #include <linux/simple_lmk.h>
+
+#include <linux/cpu_input_boost.h>
 #include <linux/devfreq_boost.h>
 
 #include <asm/pgtable.h>
@@ -359,7 +361,7 @@ static void account_kernel_stack(struct task_struct *tsk, int account)
 	}
 }
 
-static void release_task_stack(struct task_struct *tsk)
+void release_task_stack(struct task_struct *tsk)
 {
 	if (WARN_ON(tsk->state != TASK_DEAD))
 		return;  /* Better to leak the stack than to free prematurely */
@@ -601,7 +603,7 @@ static inline void put_signal_struct(struct signal_struct *sig)
 void __put_task_struct(struct task_struct *tsk)
 {
 	WARN_ON(!tsk->exit_state);
-	WARN_ON(refcount_read(&tsk->usage));
+	WARN_ON(atomic_read(&tsk->usage));
 	WARN_ON(tsk == current);
 
 	cgroup_free(tsk);
@@ -759,16 +761,12 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 #ifdef CONFIG_CC_STACKPROTECTOR
 	tsk->stack_canary = get_random_canary();
 #endif
-	if (orig->cpus_ptr == &orig->cpus_mask)
-		tsk->cpus_ptr = &tsk->cpus_mask;
 
 	/*
-	 * One for the user space visible state that goes away when reaped.
-	 * One for the scheduler.
+	 * One for us, one for whoever does the "release_task()" (usually
+	 * parent)
 	 */
-	refcount_set(&tsk->rcu_users, 2);
-	/* One for the rcu users */
-	refcount_set(&tsk->usage, 1);
+	atomic_set(&tsk->usage, 2);
 #ifdef CONFIG_BLK_DEV_IO_TRACE
 	tsk->btrace_seq = 0;
 #endif
@@ -1015,7 +1013,7 @@ void mmput_async(struct mm_struct *mm)
 {
 	if (atomic_dec_and_test(&mm->mm_users)) {
 		INIT_WORK(&mm->async_put_work, mmput_async_fn);
-		schedule_work(&mm->async_put_work);
+		queue_work(system_highpri_wq, &mm->async_put_work);
 	}
 }
 #endif
@@ -1204,8 +1202,8 @@ static void mm_release(struct task_struct *tsk, struct mm_struct *mm)
 			 * not set up a proper pointer then tough luck.
 			 */
 			put_user(0, tsk->clear_child_tid);
-			do_futex(tsk->clear_child_tid, FUTEX_WAKE,
-					1, NULL, NULL, 0, 0);
+			sys_futex(tsk->clear_child_tid, FUTEX_WAKE,
+					1, NULL, NULL, 0);
 		}
 		tsk->clear_child_tid = NULL;
 	}
@@ -1564,6 +1562,14 @@ static inline void
 init_task_pid(struct task_struct *task, enum pid_type type, struct pid *pid)
 {
 	 task->pids[type].pid = pid;
+}
+
+struct pid *pidfd_pid(const struct file *file)
+{
+	if (file->f_op == &pidfd_fops)
+		return file->private_data;
+
+	return ERR_PTR(-EBADF);
 }
 
 static int pidfd_release(struct inode *inode, struct file *file)
@@ -2197,7 +2203,6 @@ bad_fork_cleanup_perf:
 	perf_event_free_task(p);
 bad_fork_cleanup_policy:
 	lockdep_free_task(p);
-	free_task_load_ptrs(p);
 #ifdef CONFIG_NUMA
 	mpol_put(p->mempolicy);
 bad_fork_cleanup_threadgroup_lock:
@@ -2254,9 +2259,12 @@ long _do_fork(unsigned long clone_flags,
 	int trace = 0;
 	long nr;
 
-	/* Boost DDR bus to the max for 50 ms when userspace launches an app */
-	if (task_is_zygote(current))
-		devfreq_boost_kick_max(DEVFREQ_CPU_LLCC_DDR_BW, 50);
+	/* Boost CPU to the max for 500 ms when userspace launches an app */
+	if (task_is_zygote(current)) {
+		cpu_input_boost_kick_max(500, false);
+		devfreq_boost_kick_max(DEVFREQ_MSM_CPUBW, 500, true);
+		devfreq_boost_kick_max(DEVFREQ_MSM_LLCCBW, 500, true);
+	}
 
 	/*
 	 * Determine whether and which event to report to ptracer.  When

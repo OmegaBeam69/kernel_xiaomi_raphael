@@ -331,7 +331,7 @@ int drm_primary_helper_update(struct drm_plane *plane, struct drm_crtc *crtc,
 	};
 	struct drm_connector **connector_list;
 	int num_connectors, ret;
-	bool visible = false;
+	bool visible;
 
 	ret = drm_plane_helper_check_update(plane, crtc, fb,
 					    &src, &dest, &clip,

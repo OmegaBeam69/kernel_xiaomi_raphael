@@ -21,7 +21,6 @@
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/printk.h>
-#include <linux/skbuff.h>
 #include <linux/slab.h>
 
 #include <asm/byteorder.h>
@@ -174,7 +173,7 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf)
 	 *                        | ... | BPF prog stack
 	 *                        |     |
 	 *                        +-----+ <= (BPF_FP - prog->aux->stack_depth)
-	 *                        |RSVD | JIT scratchpad
+	 *                        |RSVD | padding
 	 * current A64_SP =>      +-----+ <= (BPF_FP - ctx->stack_size)
 	 *                        |     |
 	 *                        | ... | Function call stack
@@ -208,9 +207,7 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf)
 		}
 	}
 
-	/* 4 byte extra for skb_copy_bits buffer */
-	ctx->stack_size = prog->aux->stack_depth + 4;
-	ctx->stack_size = STACK_ALIGN(ctx->stack_size);
+	ctx->stack_size = STACK_ALIGN(prog->aux->stack_depth);
 
 	/* Set up function call stack */
 	emit(A64_SUB_I(1, A64_SP, A64_SP, ctx->stack_size), ctx);
@@ -703,8 +700,7 @@ emit_cond_jmp:
 			emit(A64_ADD(1, tmp, tmp, dst), ctx);
 			reg = tmp;
 		}
-		if (IS_ENABLED(CONFIG_AS_LSE) &&
-		    IS_ENABLED(CONFIG_ARM64_LSE_ATOMICS)) {
+		if (cpus_have_cap(ARM64_HAS_LSE_ATOMICS)) {
 			emit(A64_STADD(isdw, reg, src), ctx);
 		} else {
 			emit(A64_LDXR(isdw, tmp2, reg), ctx);
@@ -933,6 +929,21 @@ out:
 	return prog;
 }
 
+#ifdef CONFIG_CFI_CLANG
+bool arch_bpf_jit_check_func(const struct bpf_prog *prog)
+{
+	const uintptr_t func = (const uintptr_t)prog->bpf_func;
+
+	/*
+	 * bpf_func must be correctly aligned and within the correct region.
+	 */
+	if (unlikely(!IS_ALIGNED(func, sizeof(u32))))
+		return false;
+
+	return (func >= BPF_JIT_REGION_START && func < BPF_JIT_REGION_END);
+}
+#endif
+
 void *bpf_jit_alloc_exec(unsigned long size)
 {
 	return __vmalloc_node_range(size, PAGE_SIZE, BPF_JIT_REGION_START,
@@ -945,25 +956,3 @@ void bpf_jit_free_exec(void *addr)
 {
 	return vfree(addr);
 }
-
-#ifdef CONFIG_CFI_CLANG
-bool arch_bpf_jit_check_func(const struct bpf_prog *prog)
-{
-	const uintptr_t func = (const uintptr_t)prog->bpf_func;
-
-	/*
-	 * bpf_func must be correctly aligned and within the correct region.
-	 * module_alloc places JIT code in the module region, unless
-	 * ARM64_MODULE_PLTS is enabled, in which case we might end up using
-	 * the vmalloc region too.
-	 */
-	if (unlikely(!IS_ALIGNED(func, sizeof(u32))))
-		return false;
-
-	if (IS_ENABLED(CONFIG_ARM64_MODULE_PLTS) &&
-			is_vmalloc_addr(prog->bpf_func))
-		return true;
-
-	return (func >= MODULES_VADDR && func < MODULES_END);
-}
-#endif

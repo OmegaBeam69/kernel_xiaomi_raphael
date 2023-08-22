@@ -1,5 +1,4 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-
 /* Try to choose an implementation variant via Kconfig */
 #ifdef CONFIG_CRC32_SLICEBY8
 # define CRC_LE_BITS 64

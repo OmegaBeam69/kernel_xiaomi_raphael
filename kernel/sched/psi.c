@@ -203,7 +203,6 @@ static void group_init(struct psi_group *group)
 	INIT_DELAYED_WORK(&group->avgs_work, psi_avgs_work);
 	mutex_init(&group->avgs_lock);
 	/* Init trigger-related members */
-	atomic_set(&group->poll_scheduled, 0);
 	mutex_init(&group->trigger_lock);
 	INIT_LIST_HEAD(&group->triggers);
 	memset(group->nr_triggers, 0, sizeof(group->nr_triggers));
@@ -524,7 +523,7 @@ static void init_triggers(struct psi_group *group, u64 now)
 static u64 update_triggers(struct psi_group *group, u64 now)
 {
 	struct psi_trigger *t;
-	bool update_total = false;
+	bool new_stall = false;
 	u64 *total = group->total[PSI_POLL];
 
 	/*
@@ -533,35 +532,24 @@ static u64 update_triggers(struct psi_group *group, u64 now)
 	 */
 	list_for_each_entry(t, &group->triggers, node) {
 		u64 growth;
-		bool new_stall;
 
-		new_stall = group->polling_total[t->state] != total[t->state];
-
-		/* Check for stall activity or a previous threshold breach */
-		if (!new_stall && !t->pending_event)
+		/* Check for stall activity */
+		if (group->polling_total[t->state] == total[t->state])
 			continue;
+
 		/*
-		 * Check for new stall activity, as well as deferred
-		 * events that occurred in the last window after the
-		 * trigger had already fired (we want to ratelimit
-		 * events without dropping any).
+		 * Multiple triggers might be looking at the same state,
+		 * remember to update group->polling_total[] once we've
+		 * been through all of them. Also remember to extend the
+		 * polling time if we see new stall activity.
 		 */
-		if (new_stall) {
-			/*
-			 * Multiple triggers might be looking at the same state,
-			 * remember to update group->polling_total[] once we've
-			 * been through all of them. Also remember to extend the
-			 * polling time if we see new stall activity.
-			 */
-			update_total = true;
+		new_stall = true;
 
-			/* Calculate growth since last update */
-			growth = window_update(&t->win, now, total[t->state]);
-			if (growth < t->threshold)
-				continue;
+		/* Calculate growth since last update */
+		growth = window_update(&t->win, now, total[t->state]);
+		if (growth < t->threshold)
+			continue;
 
-			t->pending_event = true;
-		}
 		/* Limit event signaling to once per window */
 		if (now < t->last_event_time + t->win.size)
 			continue;
@@ -570,28 +558,27 @@ static u64 update_triggers(struct psi_group *group, u64 now)
 		if (cmpxchg(&t->event, 0, 1) == 0)
 			wake_up_interruptible(&t->event_wait);
 		t->last_event_time = now;
-		/* Reset threshold breach flag once event got generated */
-		t->pending_event = false;
 	}
 
-	if (update_total)
+	if (new_stall)
 		memcpy(group->polling_total, total,
 				sizeof(group->polling_total));
 
 	return now + group->poll_min_period;
 }
 
-/* Schedule polling if it's not already scheduled or forced. */
-static void psi_schedule_poll_work(struct psi_group *group, unsigned long delay,
-				   bool force)
+/* Schedule polling if it's not already scheduled. */
+static void psi_schedule_poll_work(struct psi_group *group, unsigned long delay)
 {
 	struct task_struct *task;
 
 	/*
-	 * atomic_xchg should be called even when !force to provide a
-	 * full memory barrier (see the comment inside psi_poll_work).
+	 * Do not reschedule if already scheduled.
+	 * Possible race with a timer scheduled after this check but before
+	 * mod_timer below can be tolerated because group->polling_next_update
+	 * will keep updates on schedule.
 	 */
-	if (atomic_xchg(&group->poll_scheduled, 1) && !force)
+	if (timer_pending(&group->poll_timer))
 		return;
 
 	rcu_read_lock();
@@ -603,58 +590,18 @@ static void psi_schedule_poll_work(struct psi_group *group, unsigned long delay,
 	 */
 	if (likely(task))
 		mod_timer(&group->poll_timer, jiffies + delay);
-	else
-		atomic_set(&group->poll_scheduled, 0);
 
 	rcu_read_unlock();
 }
 
 static void psi_poll_work(struct psi_group *group)
 {
-	bool force_reschedule = false;
 	u32 changed_states;
 	u64 now;
 
 	mutex_lock(&group->trigger_lock);
 
 	now = sched_clock();
-
-	if (now > group->polling_until) {
-		/*
-		 * We are either about to start or might stop polling if no
-		 * state change was recorded. Resetting poll_scheduled leaves
-		 * a small window for psi_group_change to sneak in and schedule
-		 * an immegiate poll_work before we get to rescheduling. One
-		 * potential extra wakeup at the end of the polling window
-		 * should be negligible and polling_next_update still keeps
-		 * updates correctly on schedule.
-		 */
-		atomic_set(&group->poll_scheduled, 0);
-		/*
-		 * A task change can race with the poll worker that is supposed to
-		 * report on it. To avoid missing events, ensure ordering between
-		 * poll_scheduled and the task state accesses, such that if the poll
-		 * worker misses the state update, the task change is guaranteed to
-		 * reschedule the poll worker:
-		 *
-		 * poll worker:
-		 *   atomic_set(poll_scheduled, 0)
-		 *   smp_mb()
-		 *   LOAD states
-		 *
-		 * task change:
-		 *   STORE states
-		 *   if atomic_xchg(poll_scheduled, 1) == 0:
-		 *     schedule poll worker
-		 *
-		 * The atomic_xchg() implies a full barrier.
-		 */
-		smp_mb();
-	} else {
-		/* Polling window is not over, keep rescheduling */
-		force_reschedule = true;
-	}
-
 
 	collect_percpu_times(group, PSI_POLL, &changed_states);
 
@@ -681,8 +628,7 @@ static void psi_poll_work(struct psi_group *group)
 		group->polling_next_update = update_triggers(group, now);
 
 	psi_schedule_poll_work(group,
-		nsecs_to_jiffies(group->polling_next_update - now) + 1,
-		force_reschedule);
+		nsecs_to_jiffies(group->polling_next_update - now) + 1);
 
 out:
 	mutex_unlock(&group->trigger_lock);
@@ -810,7 +756,7 @@ static void psi_group_change(struct psi_group *group, int cpu,
 	write_seqcount_end(&groupc->seq);
 
 	if (state_mask & group->poll_states)
-		psi_schedule_poll_work(group, 1, false);
+		psi_schedule_poll_work(group, 1);
 
 	if (wake_clock && !delayed_work_pending(&group->avgs_work))
 		schedule_delayed_work(&group->avgs_work, PSI_FREQ);
@@ -1214,13 +1160,11 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 	t->state = state;
 	t->threshold = threshold_us * NSEC_PER_USEC;
 	t->win.size = window_us * NSEC_PER_USEC;
-	window_reset(&t->win, sched_clock(),
-		group->total[PSI_POLL][t->state], 0);
+	window_reset(&t->win, 0, 0, 0);
 
 	t->event = 0;
 	t->last_event_time = 0;
 	init_waitqueue_head(&t->event_wait);
-	t->pending_event = false;
 
 	mutex_lock(&group->trigger_lock);
 
@@ -1312,7 +1256,6 @@ void psi_trigger_destroy(struct psi_trigger *t)
 		 * can no longer be found through group->poll_task.
 		 */
 		kthread_stop(task_to_destroy);
-		atomic_set(&group->poll_scheduled, 0);
 	}
 	kfree(t);
 }
